@@ -1,0 +1,88 @@
+name: Build OpenClient Notification Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: openclient-notification-test
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Get latest upstream commit
+        id: upstream
+        run: |
+          set -euo pipefail
+          SHA="$(curl -fsSL https://api.github.com/repos/ntoporcov/openclient/commits/main | jq -r .sha)"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout upstream source
+        uses: actions/checkout@v4
+        with:
+          repository: ntoporcov/openclient
+          ref: ${{ steps.upstream.outputs.sha }}
+
+      - name: Select latest Xcode
+        run: |
+          LATEST_XCODE="$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          sudo xcode-select -s "$LATEST_XCODE/Contents/Developer"
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Add APNs entitlement for test build
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib, re
+          candidates = list(pathlib.Path(".").rglob("*.entitlements"))
+          app_files = [p for p in candidates if "OpenCodeIOSClient" in str(p) and "Share" not in str(p) and "Widget" not in str(p)]
+          if not app_files:
+              raise SystemExit("Could not locate the main app entitlements file")
+          p = app_files[0]
+          s = p.read_text()
+          if "<key>aps-environment</key>" not in s:
+              s = re.sub(r"</dict>\s*</plist>", "    <key>aps-environment</key>\n    <string>development</string>\n</dict>\n</plist>", s, count=1)
+              p.write_text(s)
+          print("Modified:", p)
+          print(p.read_text())
+          PY
+
+      - name: Generate project
+        env:
+          INCLUDE_PROJECT_LOCAL_YAML: "0"
+        run: xcodegen generate
+
+      - name: Build Debug app
+        run: |
+          set -o pipefail
+          xcodebuild -project OpenCodeIOSClient.xcodeproj -scheme OpenCodeIOSClient \
+            -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+
+      - name: Package notification test IPA
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find "$RUNNER_TEMP/DerivedData/Build/Products/Debug-iphoneos" -maxdepth 1 -name '*.app' -print -quit)"
+          test -n "$APP_PATH"
+          mkdir Payload
+          cp -R "$APP_PATH" Payload/
+          zip -qry OpenClient-Debug_notification.ipa Payload
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Info.plist" || true
+          echo "Requested entitlements:"
+          cat "$APP_PATH/archived-expanded-entitlements.xcent" 2>/dev/null || true
+
+      - name: Upload notification test artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenClient-Debug_notification
+          path: OpenClient-Debug_notification.ipa
+          if-no-files-found: error
+          retention-days: 7
