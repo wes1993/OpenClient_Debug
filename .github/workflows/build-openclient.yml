@@ -1,0 +1,153 @@
+name: Build OpenClient Debug
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Force build even if this upstream commit was already processed"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: openclient-debug-publisher
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+      sha: ${{ steps.check.outputs.sha }}
+    steps:
+      - id: check
+        run: |
+          set -euo pipefail
+          DATA="$(curl -fsSL https://api.github.com/repos/ntoporcov/openclient/commits/main)"
+          SHA="$(jq -r .sha <<<"$DATA")"
+          DATE="$(jq -r .commit.committer.date <<<"$DATA")"
+          AGE=$(($(date -u +%s)-$(date -u -d "$DATE" +%s)))
+          CURRENT="$(curl -fsSL https://raw.githubusercontent.com/wes1993/OpenClient_Debug/main/state/upstream-sha.txt 2>/dev/null || true)"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          if [ "${{ inputs.force || false }}" = "true" ] || { [ "$SHA" != "$CURRENT" ] && [ "$AGE" -ge 14400 ]; }; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: check
+    if: needs.check.outputs.build == 'true'
+    runs-on: macos-15
+    steps:
+      - name: Checkout upstream source
+        uses: actions/checkout@v4
+        with:
+          repository: ntoporcov/openclient
+          ref: ${{ needs.check.outputs.sha }}
+
+      - name: Select latest Xcode
+        run: |
+          LATEST_XCODE="$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          sudo xcode-select -s "$LATEST_XCODE/Contents/Developer"
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        env:
+          INCLUDE_PROJECT_LOCAL_YAML: "0"
+        run: xcodegen generate
+
+      - name: Build Debug app
+        run: |
+          set -o pipefail
+          xcodebuild -project OpenCodeIOSClient.xcodeproj -scheme OpenCodeIOSClient \
+            -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+
+      - name: Package and inspect IPA
+        run: |
+          APP_PATH="$(find "$RUNNER_TEMP/DerivedData/Build/Products/Debug-iphoneos" -maxdepth 1 -name '*.app' -print -quit)"
+          test -n "$APP_PATH"
+          PLIST="$APP_PATH/Info.plist"
+          echo "APP_VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST")" >> "$GITHUB_ENV"
+          echo "APP_BUILD=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PLIST")" >> "$GITHUB_ENV"
+          echo "APP_BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST")" >> "$GITHUB_ENV"
+          mkdir Payload && cp -R "$APP_PATH" Payload/
+          zip -qry OpenClient-Debug.ipa Payload
+          echo "IPA_SIZE=$(stat -f%z OpenClient-Debug.ipa)" >> "$GITHUB_ENV"
+
+      - name: Checkout automation repository
+        uses: actions/checkout@v4
+        with:
+          repository: wes1993/OpenClient_Debug
+          path: automation
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_SHA: ${{ needs.check.outputs.sha }}
+        run: |
+          set -euo pipefail
+          TAG="openclient-${UPSTREAM_SHA:0:12}"
+          gh release view "$TAG" --repo wes1993/OpenClient_Debug >/dev/null 2>&1 || \
+            gh release create "$TAG" OpenClient-Debug.ipa --repo wes1993/OpenClient_Debug \
+              --title "OpenClient Debug $APP_VERSION ($APP_BUILD)" \
+              --notes "Automated Debug build from upstream commit $UPSTREAM_SHA."
+
+      - name: Update AltStore catalog
+        env:
+          ALTSTORE_TOKEN: ${{ secrets.ALTSTORE_REPO_TOKEN }}
+          UPSTREAM_SHA: ${{ needs.check.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "$ALTSTORE_TOKEN" ]; then
+            echo "::error::Missing ALTSTORE_REPO_TOKEN secret."
+            exit 1
+          fi
+          git clone "https://x-access-token:$ALTSTORE_TOKEN@github.com/wes1993/altstore-repo.git" catalog
+          cd catalog
+          TAG="openclient-${UPSTREAM_SHA:0:12}"
+          URL="https://github.com/wes1993/OpenClient_Debug/releases/download/$TAG/OpenClient-Debug.ipa"
+          DATE="$(date -u +%Y-%m-%d)"
+          jq --arg version "$APP_VERSION" --arg build "$APP_BUILD" --arg bundle "$APP_BUNDLE_ID" \
+             --arg date "$DATE" --arg url "$URL" --arg sha "$UPSTREAM_SHA" --argjson size "$IPA_SIZE" '
+            .apps = (if any(.apps[]?; .bundleIdentifier == $bundle) then .apps else
+              .apps + [{"name":"OpenClient","bundleIdentifier":$bundle,"developerName":"OpenClient",
+              "subtitle":"Personal non-commercial Debug build",
+              "localizedDescription":"Automated personal Debug build from the upstream OpenClient source.",
+              "iconURL":"https://raw.githubusercontent.com/ntoporcov/openclient/main/OpenCodeIOSClient/Assets.xcassets/AppIcon.appiconset/icon-1024.png","versions":[]}] end) |
+            .apps |= map(if .bundleIdentifier == $bundle then
+              .versions = ([{"version":$version,"buildVersion":$build,"date":$date,"downloadURL":$url,
+              "size":$size,"localizedDescription":("Upstream commit " + $sha)}] +
+              [.versions[]? | select(.downloadURL != $url)])
+            else . end)
+          ' apps.json > apps.tmp
+          mv apps.tmp apps.json
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add apps.json
+          git commit -m "Update OpenClient to $APP_VERSION ($APP_BUILD)" || true
+          git push
+
+      - name: Record processed upstream commit
+        if: success()
+        env:
+          UPSTREAM_SHA: ${{ needs.check.outputs.sha }}
+        run: |
+          cd automation
+          mkdir -p state
+          printf '%s\n' "$UPSTREAM_SHA" > state/upstream-sha.txt
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add state/upstream-sha.txt
+          git commit -m "Record upstream $UPSTREAM_SHA" || true
+          git push
