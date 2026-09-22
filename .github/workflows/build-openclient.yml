@@ -92,25 +92,28 @@ jobs:
 
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           path = Path("OpenCodeIOSClient/Facades/NewProjectChatFacade.swift")
           text = path.read_text()
 
-          start = "        Publishers.MergeMany([\n"
-          end = """        ])
-          .sink { [weak self] _ in self?.objectWillChange.send() }
-          .store(in: &observations)
-          """
+          # Match the known MergeMany structurally rather than depending on exact
+          # indentation/newline formatting around the closing bracket and sink.
+          pattern = re.compile(
+              r"(?m)^(?P<indent>[ \\t]*)Publishers\\.MergeMany\\(\\[\\s*\\n"
+              r"(?P<body>.*?)"
+              r"^(?P=indent)\\]\\)\\s*\\n"
+              r"^(?P=indent)\\.sink\\s*\\{\\s*\\[weak self\\] _ in self\\?\\.objectWillChange\\.send\\(\\) \\}\\s*\\n"
+              r"^(?P=indent)\\.store\\(in: &observations\\)",
+              re.DOTALL,
+          )
+          matches = list(pattern.finditer(text))
+          if len(matches) != 1:
+              raise SystemExit(f"Expected exactly one known MergeMany observation block, found {len(matches)}; refusing to apply workaround.")
 
-          # The sink/store suffix can legitimately occur elsewhere in this file.
-          # Require a single known MergeMany start, then match the first suffix after it.
-          if text.count(start) != 1:
-              raise SystemExit("Known MergeMany start changed upstream; refusing to apply workaround.")
-
-          before, rest = text.split(start, 1)
-          if end not in rest:
-              raise SystemExit("Known MergeMany end changed upstream; refusing to apply workaround.")
-          body, after = rest.split(end, 1)
+          match = matches[0]
+          indent = match.group("indent")
+          body = match.group("body")
           entries = [line for line in body.splitlines() if line.strip()]
 
           if len(entries) < 2 or not all(line.lstrip().startswith("viewModel.") and line.rstrip().endswith(",") for line in entries):
@@ -121,18 +124,19 @@ jobs:
           for index, line in enumerate(entries):
               name = f"changePublisher{index}"
               expression = line.strip()[:-1]
-              declarations.append(f"        let {name}: AnyPublisher<Void, Never> = {expression}")
+              declarations.append(f"{indent}let {name}: AnyPublisher<Void, Never> = {expression}")
               names.append(name)
 
           replacement = (
-              "\n".join(declarations)
-              + "\n\n        Publishers.MergeMany([\n            "
-              + ",\n            ".join(names)
-              + "\n"
-              + end
+              "\\n".join(declarations)
+              + f"\\n\\n{indent}Publishers.MergeMany([\\n{indent}    "
+              + f",\\n{indent}    ".join(names)
+              + f"\\n{indent}])\\n"
+              + f"{indent}.sink {{ [weak self] _ in self?.objectWillChange.send() }}\\n"
+              + f"{indent}.store(in: &observations)"
           )
 
-          path.write_text(before + replacement + after)
+          path.write_text(text[:match.start()] + replacement + text[match.end():])
           PY
 
           # Ensure the workaround actually changed only the expected upstream file.
