@@ -68,10 +68,75 @@ jobs:
       - name: Build Debug app
         run: |
           set -o pipefail
-          xcodebuild -project OpenCodeIOSClient.xcodeproj -scheme OpenCodeIOSClient \
-            -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' \
-            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+
+          build_app() {
+            xcodebuild -project OpenCodeIOSClient.xcodeproj -scheme OpenCodeIOSClient \
+              -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' \
+              -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+              CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+          }
+
+          # Always try the untouched upstream source first.
+          if build_app 2>&1 | tee "$RUNNER_TEMP/openclient-build.log"; then
+            exit 0
+          fi
+
+          # Only use the workaround for the known Swift type-checker failure.
+          if ! grep -q "compiler is unable to type-check this expression in reasonable time" "$RUNNER_TEMP/openclient-build.log" || \
+             ! grep -q "NewProjectChatFacade.swift" "$RUNNER_TEMP/openclient-build.log"; then
+            echo "::error::Normal build failed for an unrelated reason; temporary workaround not applied."
+            exit 1
+          fi
+
+          echo "::warning::Known NewProjectChatFacade Swift type-checker failure detected. Applying temporary local workaround and retrying."
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("OpenCodeIOSClient/Facades/NewProjectChatFacade.swift")
+          text = path.read_text()
+
+          start = "        Publishers.MergeMany([\n"
+          end = """        ])
+          .sink { [weak self] _ in self?.objectWillChange.send() }
+          .store(in: &observations)
+          """
+
+          if text.count(start) != 1 or text.count(end) != 1:
+              raise SystemExit("Known MergeMany block changed upstream; refusing to apply workaround.")
+
+          before, rest = text.split(start, 1)
+          body, after = rest.split(end, 1)
+          entries = [line for line in body.splitlines() if line.strip()]
+
+          if len(entries) < 2 or not all(line.lstrip().startswith("viewModel.") and line.rstrip().endswith(",") for line in entries):
+              raise SystemExit("Unexpected MergeMany contents; refusing to apply workaround.")
+
+          declarations = []
+          names = []
+          for index, line in enumerate(entries):
+              name = f"changePublisher{index}"
+              expression = line.strip()[:-1]
+              declarations.append(f"        let {name}: AnyPublisher<Void, Never> = {expression}")
+              names.append(name)
+
+          replacement = (
+              "\n".join(declarations)
+              + "\n\n        Publishers.MergeMany([\n            "
+              + ",\n            ".join(names)
+              + "\n"
+              + end
+          )
+
+          path.write_text(before + replacement + after)
+          PY
+
+          # Ensure the workaround actually changed only the expected upstream file.
+          git diff --check
+          git diff -- OpenCodeIOSClient/Facades/NewProjectChatFacade.swift
+
+          rm -rf "$RUNNER_TEMP/DerivedData"
+          build_app
 
       - name: Package and inspect IPA
         run: |
