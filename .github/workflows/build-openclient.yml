@@ -183,16 +183,43 @@ jobs:
           TAG="openclient-${UPSTREAM_SHA:0:12}"
           URL="https://github.com/wes1993/OpenClient_Debug/releases/download/$TAG/OpenClient-Debug.ipa"
           DATE="$(date -u +%Y-%m-%d)"
+
+          PREVIOUS="$(cat ../automation/state/upstream-sha.txt 2>/dev/null || true)"
+          RELEASE_NOTES_PATH="../fastlane/metadata/it/release_notes.txt"
+          CHANGELOG=""
+
+          # Prefer the upstream Italian release notes only when that file changed
+          # between the previously published SHA and the SHA being published now.
+          if [ -n "$PREVIOUS" ] && git -C .. cat-file -e "$PREVIOUS^{commit}" 2>/dev/null; then
+            if git -C .. diff --quiet "$PREVIOUS" "$UPSTREAM_SHA" -- fastlane/metadata/it/release_notes.txt; then
+              echo "Upstream release_notes.txt was not updated; using all upstream commit messages."
+            else
+              CHANGELOG="$(cat "$RELEASE_NOTES_PATH" 2>/dev/null || true)"
+            fi
+          fi
+
+          # Fallback: include every upstream commit message, without filtering.
+          if [ -z "$CHANGELOG" ]; then
+            if [ -n "$PREVIOUS" ] && git -C .. cat-file -e "$PREVIOUS^{commit}" 2>/dev/null; then
+              CHANGELOG="$(git -C .. log --reverse --format='• %s%n%b' "$PREVIOUS..$UPSTREAM_SHA")"
+            else
+              CHANGELOG="$(git -C .. show -s --format='%s%n%b' "$UPSTREAM_SHA")"
+            fi
+          fi
+
+          # Keep the exact upstream SHA visible for traceability.
+          CHANGELOG="$(printf '%s\n\nUpstream commit: %s' "$CHANGELOG" "$UPSTREAM_SHA")"
+
           jq --arg version "$APP_VERSION" --arg build "$APP_BUILD" --arg bundle "$APP_BUNDLE_ID" \
-             --arg date "$DATE" --arg url "$URL" --arg sha "$UPSTREAM_SHA" --argjson size "$IPA_SIZE" '
+             --arg date "$DATE" --arg url "$URL" --arg changelog "$CHANGELOG" --argjson size "$IPA_SIZE" '
             .apps = (if any(.apps[]?; .bundleIdentifier == $bundle) then .apps else
               .apps + [{"name":"OpenClient","bundleIdentifier":$bundle,"developerName":"OpenClient",
               "subtitle":"Personal non-commercial Debug build",
               "localizedDescription":"Automated personal Debug build from the upstream OpenClient source.",
-              "iconURL":"https://raw.githubusercontent.com/ntoporcov/openclient/main/OpenCodeIOSClient/Assets.xcassets/AppIcon.appiconset/icon-1024.png","versions":[]}] end) |
+              "iconURL":"https://raw.githubusercontent.com/ntoporcov/openclient/main/OpenCodeIOSClient/Assets.xcassets/AppIcon.appiconset/ios-1024.png","versions":[]}] end) |
             .apps |= map(if .bundleIdentifier == $bundle then
               .versions = ([{"version":$version,"buildVersion":$build,"date":$date,"downloadURL":$url,
-              "size":$size,"localizedDescription":("Upstream commit " + $sha)}] +
+              "size":$size,"localizedDescription":$changelog}] +
               [.versions[]? | select(.downloadURL != $url)])
             else . end)
           ' apps.json > apps.tmp
