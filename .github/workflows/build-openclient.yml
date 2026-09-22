@@ -102,10 +102,14 @@ jobs:
           .store(in: &observations)
           """
 
-          if text.count(start) != 1 or text.count(end) != 1:
-              raise SystemExit("Known MergeMany block changed upstream; refusing to apply workaround.")
+          # The sink/store suffix can legitimately occur elsewhere in this file.
+          # Require a single known MergeMany start, then match the first suffix after it.
+          if text.count(start) != 1:
+              raise SystemExit("Known MergeMany start changed upstream; refusing to apply workaround.")
 
           before, rest = text.split(start, 1)
+          if end not in rest:
+              raise SystemExit("Known MergeMany end changed upstream; refusing to apply workaround.")
           body, after = rest.split(end, 1)
           entries = [line for line in body.splitlines() if line.strip()]
 
