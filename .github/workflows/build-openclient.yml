@@ -92,51 +92,55 @@ jobs:
 
           python3 - <<'PY'
           from pathlib import Path
-          import re
 
           path = Path("OpenCodeIOSClient/Facades/NewProjectChatFacade.swift")
           text = path.read_text()
+          lines = text.splitlines(keepends=True)
 
-          # Match the known MergeMany structurally rather than depending on exact
-          # indentation/newline formatting around the closing bracket and sink.
-          pattern = re.compile(
-              r"(?m)^(?P<indent>[ \\t]*)Publishers\\.MergeMany\\(\\[\\s*\\n"
-              r"(?P<body>.*?)"
-              r"^(?P=indent)\\]\\)\\s*\\n"
-              r"^(?P=indent)\\.sink\\s*\\{\\s*\\[weak self\\] _ in self\\?\\.objectWillChange\\.send\\(\\) \\}\\s*\\n"
-              r"^(?P=indent)\\.store\\(in: &observations\\)",
-              re.DOTALL,
-          )
-          matches = list(pattern.finditer(text))
-          if len(matches) != 1:
-              raise SystemExit(f"Expected exactly one known MergeMany observation block, found {len(matches)}; refusing to apply workaround.")
+          starts = [i for i, line in enumerate(lines) if line.strip() == "Publishers.MergeMany(["]
+          if len(starts) != 1:
+              raise SystemExit(f"Expected exactly one MergeMany observation block, found {len(starts)}; refusing to apply workaround.")
 
-          match = matches[0]
-          indent = match.group("indent")
-          body = match.group("body")
-          entries = [line for line in body.splitlines() if line.strip()]
+          start = starts[0]
+          indent = lines[start][:len(lines[start]) - len(lines[start].lstrip())]
+          end = None
+          for i in range(start + 1, len(lines) - 2):
+              if (
+                  lines[i].strip() == "])"
+                  and lines[i + 1].strip() == ".sink { [weak self] _ in self?.objectWillChange.send() }"
+                  and lines[i + 2].strip() == ".store(in: &observations)"
+              ):
+                  end = i + 2
+                  break
 
-          if len(entries) < 2 or not all(line.lstrip().startswith("viewModel.") and line.rstrip().endswith(",") for line in entries):
+          if end is None:
+              raise SystemExit("Known MergeMany closing block changed upstream; refusing to apply workaround.")
+
+          entries = [line.strip() for line in lines[start + 1:end - 2] if line.strip()]
+          if len(entries) < 2 or not all(entry.startswith("viewModel.") and entry.endswith(",") for entry in entries):
               raise SystemExit("Unexpected MergeMany contents; refusing to apply workaround.")
 
-          declarations = []
-          names = []
-          for index, line in enumerate(entries):
-              name = f"changePublisher{index}"
-              expression = line.strip()[:-1]
-              declarations.append(f"{indent}let {name}: AnyPublisher<Void, Never> = {expression}")
-              names.append(name)
-
+          declarations = [
+              f"{indent}let changePublisher{index}: AnyPublisher<Void, Never> = {entry[:-1]}\n"
+              for index, entry in enumerate(entries)
+          ]
+          names = [f"changePublisher{index}" for index in range(len(entries))]
           replacement = (
-              "\\n".join(declarations)
-              + f"\\n\\n{indent}Publishers.MergeMany([\\n{indent}    "
-              + f",\\n{indent}    ".join(names)
-              + f"\\n{indent}])\\n"
-              + f"{indent}.sink {{ [weak self] _ in self?.objectWillChange.send() }}\\n"
-              + f"{indent}.store(in: &observations)"
+              declarations
+              + [f"\n{indent}Publishers.MergeMany([\n"]
+              + [f"{indent}    {name},\n" for name in names]
+              + [
+                  f"{indent}])\n",
+                  f"{indent}.sink {{ [weak self] _ in self?.objectWillChange.send() }}\n",
+                  f"{indent}.store(in: &observations)\n",
+              ]
           )
 
-          path.write_text(text[:match.start()] + replacement + text[match.end():])
+          patched = "".join(lines[:start] + replacement + lines[end + 1:])
+          if patched == text:
+              raise SystemExit("Workaround produced no source change; refusing to retry.")
+          path.write_text(patched)
+          print(f"Temporary workaround applied to {len(entries)} publishers.")
           PY
 
           # Ensure the workaround actually changed only the expected upstream file.
