@@ -73,7 +73,7 @@ jobs:
           path = Path("OpenCodeIOSClient/ProviderUsage/ProviderUsageCredentialRepository.swift")
           text = path.read_text()
 
-          old = '''    convenience init(bundle: Bundle = .main) throws {
+          old = \"\"\"    convenience init(bundle: Bundle = .main) throws {
         guard let accessGroup = bundle.object(forInfoDictionaryKey: Self.privateAccessGroupInfoKey) as? String,
               !accessGroup.isEmpty else {
             throw ProviderUsageCredentialRepositoryError.invalidConfiguration
@@ -104,7 +104,7 @@ jobs:
 
         self.init(accessGroup: accessGroup, security: SystemProviderUsageSecurityClient())
     }
-'''
+"""
 
           if text.count(old) != 1:
               raise SystemExit("Expected exactly one known Keychain initializer; refusing to patch changed upstream source.")
