@@ -211,6 +211,13 @@ jobs:
           zip -qry OpenClient-Debug.ipa Payload
           echo "IPA_SIZE=$(stat -f%z OpenClient-Debug.ipa)" >> "$GITHUB_ENV"
 
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenClient-Debug
+          path: OpenClient-Debug.ipa
+          if-no-files-found: error
+
       - name: Checkout automation repository
         uses: actions/checkout@v4
         with:
