@@ -65,6 +65,57 @@ jobs:
           INCLUDE_PROJECT_LOCAL_YAML: "0"
         run: xcodegen generate
 
+      - name: Apply SideStore private Keychain compatibility patch
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("OpenCodeIOSClient/ProviderUsage/ProviderUsageCredentialRepository.swift")
+          text = path.read_text()
+
+          old = '''    convenience init(bundle: Bundle = .main) throws {
+        guard let accessGroup = bundle.object(forInfoDictionaryKey: Self.privateAccessGroupInfoKey) as? String,
+              !accessGroup.isEmpty else {
+            throw ProviderUsageCredentialRepositoryError.invalidConfiguration
+        }
+        self.init(accessGroup: accessGroup, security: SystemProviderUsageSecurityClient())
+    }
+'''
+
+          new = '''    convenience init(bundle: Bundle = .main) throws {
+        guard let configuredAccessGroup = bundle.object(forInfoDictionaryKey: Self.privateAccessGroupInfoKey) as? String,
+              !configuredAccessGroup.isEmpty else {
+            throw ProviderUsageCredentialRepositoryError.invalidConfiguration
+        }
+
+        // Personal Debug builds are unsigned in CI and later re-signed by SideStore.
+        // SideStore appends the 10-character Apple Team ID to the final bundle ID.
+        // Derive the private main-app Keychain group from that final signed identity
+        // instead of the build-time AppIdentifierPrefix, which CI cannot know.
+        let accessGroup: String
+        if let bundleID = bundle.bundleIdentifier,
+           let teamID = bundleID.split(separator: ".").last.map(String.init),
+           teamID.count == 10,
+           teamID.allSatisfy({ $0.isUppercase || $0.isNumber }) {
+            accessGroup = "\\(teamID).\\(bundleID)"
+        } else {
+            accessGroup = configuredAccessGroup
+        }
+
+        self.init(accessGroup: accessGroup, security: SystemProviderUsageSecurityClient())
+    }
+'''
+
+          if text.count(old) != 1:
+              raise SystemExit("Expected exactly one known Keychain initializer; refusing to patch changed upstream source.")
+
+          path.write_text(text.replace(old, new))
+          print("Applied SideStore private Keychain compatibility patch.")
+          PY
+
+          git diff --check
+          git diff -- OpenCodeIOSClient/ProviderUsage/ProviderUsageCredentialRepository.swift
+
       - name: Build Debug app
         run: |
           set -o pipefail
