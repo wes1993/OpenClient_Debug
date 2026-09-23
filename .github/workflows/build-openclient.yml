@@ -288,7 +288,7 @@ jobs:
             .apps |= map(if .bundleIdentifier == $bundle then
               .versions = ([{"version":$version,"buildVersion":$build,"date":$date,"downloadURL":$url,
               "size":$size,"localizedDescription":$changelog}] +
-              [.versions[]? | select(.downloadURL != $url)])
+              [.versions[]? | select((.version != $version) or (.buildVersion != $build))])
             else . end)
           ' apps.json > apps.tmp
           mv apps.tmp apps.json
