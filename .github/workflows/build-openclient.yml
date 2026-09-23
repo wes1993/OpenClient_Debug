@@ -114,6 +114,175 @@ jobs:
           git diff --check
           git diff -- OpenCodeIOSClient/ProviderUsage/ProviderUsageCredentialRepository.swift
           
+      - name: Apply Provider Usage save diagnostics patch
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match, found {count}; refusing diagnostic patch.")
+              return text.replace(old, new)
+          
+          # 1) Keep a sanitized save failure code in ProviderUsageStore.
+          store_path = Path("OpenCodeIOSClient/Stores/ProviderUsageStore.swift")
+          store = store_path.read_text()
+          store = replace_once(
+              store,
+              "    private(set) var setupImportError: ProviderUsageCredentialImportError?\n",
+              "    private(set) var setupImportError: ProviderUsageCredentialImportError?\n"
+              "    private(set) var setupSaveDiagnosticCode: String?\n",
+              "ProviderUsageStore property"
+          )
+          store = replace_once(
+              store,
+              """    func failSave(generation expected: UUID) {
+                  guard generation == expected else { return }
+                  setupPhase = .idle
+                  setupStatus = .saveFailed
+                  setupImportError = nil
+              }
+          """,
+              """    func failSave(generation expected: UUID, diagnosticCode: String? = nil) {
+                  guard generation == expected else { return }
+                  setupPhase = .idle
+                  setupStatus = .saveFailed
+                  setupImportError = nil
+                  setupSaveDiagnosticCode = diagnosticCode
+              }
+          """,
+              "ProviderUsageStore failSave"
+          )
+          # Clear any previous diagnostic whenever the normal setup flow clears import errors.
+          store = store.replace(
+              "        setupImportError = nil\n",
+              "        setupImportError = nil\n        setupSaveDiagnosticCode = nil\n"
+          )
+          # failSave must retain the code after the generic clear inserted above.
+          store = store.replace(
+              "        setupSaveDiagnosticCode = nil\n        setupSaveDiagnosticCode = diagnosticCode\n",
+              "        setupSaveDiagnosticCode = diagnosticCode\n"
+          )
+          store_path.write_text(store)
+          
+          # 2) Preserve the exact sanitized repository error category in the coordinator.
+          coord_path = Path("OpenCodeIOSClient/Coordinators/ProviderUsageCoordinator.swift")
+          coord = coord_path.read_text()
+          coord = replace_once(
+              coord,
+              """        } catch {
+                      guard !Task.isCancelled else { return }
+                      store.failSave(generation: generation)
+                      return
+                  }
+                  guard !Task.isCancelled,
+          """,
+              """        } catch let error as ProviderUsageAccountRepositoryError {
+                      guard !Task.isCancelled else { return }
+                      store.failSave(generation: generation, diagnosticCode: debugSaveCode(error))
+                      return
+                  } catch {
+                      guard !Task.isCancelled else { return }
+                      store.failSave(generation: generation, diagnosticCode: "SAVE_UNKNOWN")
+                      return
+                  }
+                  guard !Task.isCancelled,
+          """,
+              "ProviderUsageCoordinator save catch"
+          )
+          
+          diagnostic_helper = """
+              private func debugSaveCode(_ error: ProviderUsageAccountRepositoryError) -> String {
+                  switch error {
+                  case .credential(let credential):
+                      switch credential {
+                      case .missing: return "SAVE_CREDENTIAL_MISSING"
+                      case .unavailable: return "SAVE_CREDENTIAL_UNAVAILABLE"
+                      case .writeFailed: return "SAVE_CREDENTIAL_WRITE_FAILED"
+                      case .readBackFailed: return "SAVE_CREDENTIAL_READBACK_FAILED"
+                      case .deleteFailed: return "SAVE_CREDENTIAL_DELETE_FAILED"
+                      case .invalidConfiguration: return "SAVE_CREDENTIAL_INVALID_CONFIGURATION"
+                      }
+                  case .metadata(let metadata):
+                      switch metadata {
+                      case .unavailable: return "SAVE_METADATA_UNAVAILABLE"
+                      case .invalidData: return "SAVE_METADATA_INVALID_DATA"
+                      case .writeFailed: return "SAVE_METADATA_WRITE_FAILED"
+                      }
+                  case .removalRollbackFailed:
+                      return "SAVE_REMOVAL_ROLLBACK_FAILED"
+                  case .credentialCleanupFailed:
+                      return "SAVE_CREDENTIAL_CLEANUP_FAILED"
+                  case .accountMissing:
+                      return "SAVE_ACCOUNT_MISSING"
+                  case .credentialRevisionMismatch:
+                      return "SAVE_CREDENTIAL_REVISION_MISMATCH"
+                  }
+              }
+          
+          """
+          coord = replace_once(
+              coord,
+              "    func refresh(accountID: UUID) async {\n",
+              diagnostic_helper + "    func refresh(accountID: UUID) async {\n",
+              "ProviderUsageCoordinator diagnostic helper insertion"
+          )
+          coord_path.write_text(coord)
+          
+          # 3) Display the sanitized code under "Account save failed".
+          view_path = Path("OpenCodeIOSClient/Views/Connection/ProviderUsageView.swift")
+          view = view_path.read_text()
+          view = replace_once(
+              view,
+              """                status: store.setupStatus,
+                          importError: store.setupImportError,
+                          usesInsecureTransport: usesInsecureTransport,
+          """,
+              """                status: store.setupStatus,
+                          importError: store.setupImportError,
+                          saveDiagnosticCode: store.setupSaveDiagnosticCode,
+                          usesInsecureTransport: usesInsecureTransport,
+          """,
+              "ProviderUsageView setup section call"
+          )
+          view = replace_once(
+              view,
+              """    let status: ProviderUsageStatus?
+              let importError: ProviderUsageCredentialImportError?
+              let usesInsecureTransport: Bool
+          """,
+              """    let status: ProviderUsageStatus?
+              let importError: ProviderUsageCredentialImportError?
+              let saveDiagnosticCode: String?
+              let usesInsecureTransport: Bool
+          """,
+              "ProviderUsageSetupSection property"
+          )
+          view = replace_once(
+              view,
+              """                        if status == .importFailed, let importError {
+                                      Text(providerUsageCredentialImportReason(importError))
+          """,
+              """                        if status == .saveFailed, let saveDiagnosticCode {
+                                      Text(saveDiagnosticCode)
+                                          .font(.footnote.monospaced())
+                                          .foregroundStyle(.secondary)
+                                          .textSelection(.enabled)
+                                  }
+                                  if status == .importFailed, let importError {
+                                      Text(providerUsageCredentialImportReason(importError))
+          """,
+              "ProviderUsageSetupSection diagnostic display"
+          )
+          view_path.write_text(view)
+          
+          print("Applied Provider Usage save diagnostics patch.")
+          PY
+          
+          git diff --check
+          git diff -- OpenCodeIOSClient/Stores/ProviderUsageStore.swift OpenCodeIOSClient/Coordinators/ProviderUsageCoordinator.swift OpenCodeIOSClient/Views/Connection/ProviderUsageView.swift
+          
       - name: Build Debug app
         run: |
           set -o pipefail
