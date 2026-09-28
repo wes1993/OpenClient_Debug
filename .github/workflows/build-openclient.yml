@@ -139,6 +139,15 @@ jobs:
           path = Path("OpenCodeIOSClient/Views/Root/RootView.swift")
           text = path.read_text()
 
+          old_split = "NavigationSplitView(columnVisibility: $columnVisibility, preferredCompactColumn: $preferredCompactColumn)"
+          new_split = "NavigationSplitView(columnVisibility: $columnVisibility, preferredCompactColumn: preferredCompactColumnBinding)"
+          if text.count(old_split) != 1:
+              raise SystemExit(
+                  f"Expected exactly one NavigationSplitView root initializer, found {text.count(old_split)}; "
+                  "refusing to patch changed upstream source."
+              )
+          text = text.replace(old_split, new_split)
+
           needle = "withAnimation(opencodeSelectionAnimation)"
           count = text.count(needle)
           if count < 4:
@@ -146,9 +155,10 @@ jobs:
                   f"Expected multiple RootView navigation animations, found {count}; "
                   "refusing to patch changed upstream source."
               )
-
-          replacement = "withAnimation(isIOS18Runtime ? nil : opencodeSelectionAnimation)"
-          text = text.replace(needle, replacement)
+          text = text.replace(
+              needle,
+              "withAnimation(isIOS18Runtime ? nil : opencodeSelectionAnimation)"
+          )
 
           old_animation = ".animation(opencodeSelectionAnimation, value: shell.hasActiveWorkspace)"
           new_animation = ".animation(isIOS18Runtime ? nil : opencodeSelectionAnimation, value: shell.hasActiveWorkspace)"
@@ -169,6 +179,19 @@ jobs:
           #endif
           }
 
+              // iOS 18 can repeatedly write transient compact-column values back through
+              // NavigationSplitView while the sidebar is becoming visible. Keep the app's
+              // own direct state changes, but ignore those framework-originated writes.
+              private var preferredCompactColumnBinding: Binding<NavigationSplitViewColumn> {
+                  Binding(
+                      get: { preferredCompactColumn },
+                      set: { newValue in
+                          guard !isIOS18Runtime else { return }
+                          preferredCompactColumn = newValue
+                      }
+                  )
+              }
+
               private var usesBrowserInspector: Bool {
           """
           if text.count(anchor) != 1:
@@ -180,8 +203,9 @@ jobs:
 
           path.write_text(text)
           print(
-              f"Applied iOS 18 runtime navigation patch: disabled {count} split-view route animations "
-              "on iOS 18 only; iOS 26+ keeps upstream animations."
+              "Applied iOS 18 runtime navigation patch: framework writes to preferredCompactColumn "
+              "are ignored on iOS 18 and split-view route animations are disabled there only. "
+              "iOS 26+ keeps upstream behavior."
           )
           PY
 
@@ -191,14 +215,29 @@ jobs:
       - name: Build Debug app
         env:
           DISABLE_SWIFT_WORKAROUND: ${{ inputs.disable_swift_workaround || false }}
+          FORCE_BUILD: ${{ inputs.force || false }}
         run: |
           set -o pipefail
+
+          # Forced builds of the same upstream commit need a unique bundle build number so
+          # the installed IPA can be identified unambiguously. Preserve the upstream build
+          # as the first numeric component, and append GitHub's monotonically increasing
+          # workflow run number: e.g. upstream 46 -> forced build 46.123.
+          EXTRA_BUILD_ARGS=()
+          if [ "$FORCE_BUILD" = "true" ]; then
+            UPSTREAM_BUILD="$(grep -m1 -E 'CURRENT_PROJECT_VERSION = [0-9]+;' OpenCodeIOSClient.xcodeproj/project.pbxproj | sed -E 's/.*= ([0-9]+);.*/\\1/')"
+            test -n "$UPSTREAM_BUILD"
+            FORCED_BUILD_NUMBER="${UPSTREAM_BUILD}.${GITHUB_RUN_NUMBER}"
+            EXTRA_BUILD_ARGS+=("CURRENT_PROJECT_VERSION=${FORCED_BUILD_NUMBER}")
+            echo "Forced build number: ${FORCED_BUILD_NUMBER}"
+          fi
 
           build_app() {
             xcodebuild -project OpenCodeIOSClient.xcodeproj -scheme OpenCodeIOSClient \
               -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' \
               -derivedDataPath "$RUNNER_TEMP/DerivedData" \
-              CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+              CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+              "${EXTRA_BUILD_ARGS[@]}" build
           }
 
           # Always try the untouched upstream source first.
