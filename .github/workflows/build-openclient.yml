@@ -130,7 +130,7 @@ jobs:
           git diff --check
           git diff -- OpenCodeIOSClient/ProviderUsage/ProviderUsageCredentialRepository.swift
           
-      - name: Apply iOS 18 Projects recent-sessions task compatibility patch
+      - name: Apply iOS 18 Projects diagnostic compatibility patch
         if: ${{ !inputs.disable_ios18_patch }}
         run: |
           python3 - <<'PY'
@@ -139,66 +139,134 @@ jobs:
           path = Path("OpenCodeIOSClient/Views/Projects/ProjectListView.swift")
           text = path.read_text()
 
-          old_task = """        .task(id: snapshot.recentLoadKey) {
-                      guard !isScreenshotScene else { return }
-                      await facade.loadRecentSessions()
-                  }
+          old_body = """    var body: some View {
+                  projectListContent
+              }
           """
-          new_task = """        .modifier(ProjectListRecentSessionsTaskCompatibility(
-                      facade: facade,
-                      recentLoadKey: snapshot.recentLoadKey,
-                      isScreenshotScene: isScreenshotScene
-                  ))
+          new_body = """    var body: some View {
+                  if isIOS18Runtime {
+                      projectListDiagnosticContent
+                  } else {
+                      projectListContent
+                  }
+              }
           """
 
-          if text.count(old_task) != 1:
+          if text.count(old_body) != 1:
               raise SystemExit(
-                  f"Expected exactly one recent-sessions task block, found {text.count(old_task)}; "
+                  f"Expected exactly one ProjectListView body block, found {text.count(old_body)}; "
                   "refusing to patch changed upstream source."
               )
-          text = text.replace(old_task, new_task)
+          text = text.replace(old_body, new_body)
 
-          anchor = """private struct ProjectSessionSearchSection: View {
+          anchor = """    private var emptyProjectsMessage: LocalizedStringResource {
           """
-          helper = """private struct ProjectListRecentSessionsTaskCompatibility: ViewModifier {
-              let facade: ProjectFacade
-              let recentLoadKey: String
-              let isScreenshotScene: Bool
-
-              @ViewBuilder
-              func body(content: Content) -> some View {
+          diagnostic = """    private var isIOS18Runtime: Bool {
           #if os(iOS) && !targetEnvironment(macCatalyst)
-                  if ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 18 {
-                      content
-                  } else {
-                      content.task(id: recentLoadKey) {
-                          guard !isScreenshotScene else { return }
-                          await facade.loadRecentSessions()
-                      }
-                  }
+                  ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 18
           #else
-                  content.task(id: recentLoadKey) {
-                      guard !isScreenshotScene else { return }
-                      await facade.loadRecentSessions()
-                  }
+                  false
           #endif
               }
-          }
 
-          private struct ProjectSessionSearchSection: View {
+              @ViewBuilder
+              private var projectListDiagnosticContent: some View {
+                  let snapshot = facade.listSnapshot
+
+                  ScrollView {
+                      VStack(alignment: .leading, spacing: 16) {
+                          Text("iOS 18 PATCH ACTIVE")
+                              .font(.headline.weight(.bold))
+                              .foregroundStyle(.red)
+                              .frame(maxWidth: .infinity, alignment: .leading)
+
+                          Text("Diagnostic Projects View")
+                              .font(.title2.weight(.semibold))
+
+                          if facade.allowsActivity {
+                              Button {
+                                  onActivityChosen()
+                              } label: {
+                                  HStack {
+                                      Image(systemName: "waveform.path.ecg")
+                                      Text("Activity")
+                                      Spacer()
+                                      Image(systemName: "chevron.right")
+                                  }
+                                  .padding(.vertical, 10)
+                              }
+                              .buttonStyle(.plain)
+                          }
+
+                          Divider()
+
+                          ForEach(snapshot.projects) { project in
+                              Button {
+                                  Task { @MainActor in
+                                      guard let ticket = await facade.prepareSelectionForNavigation(project) else { return }
+                                      onProjectChosen()
+                                      await facade.completeSelection(ticket)
+                                  }
+                              } label: {
+                                  HStack(spacing: 12) {
+                                      Image(systemName: project.id == "global" ? "globe" : "folder.fill")
+                                          .frame(width: 28)
+
+                                      VStack(alignment: .leading, spacing: 3) {
+                                          Text(projectTitle(project))
+                                              .font(.body.weight(.semibold))
+                                              .foregroundStyle(.primary)
+
+                                          Text(project.id == "global"
+                                               ? String(localized: "Shared sessions across the current server context")
+                                               : project.worktree)
+                                              .font(.caption)
+                                              .foregroundStyle(.secondary)
+                                              .lineLimit(1)
+                                      }
+
+                                      Spacer(minLength: 8)
+                                      Image(systemName: "chevron.right")
+                                          .font(.caption.weight(.bold))
+                                          .foregroundStyle(.tertiary)
+                                  }
+                                  .padding(.vertical, 10)
+                                  .contentShape(Rectangle())
+                              }
+                              .buttonStyle(.plain)
+
+                              Divider()
+                          }
+
+                          Button {
+                              connection.disconnect()
+                          } label: {
+                              Label("Disconnect", systemImage: "rectangle.portrait.and.arrow.right")
+                                  .foregroundStyle(.red)
+                                  .padding(.vertical, 10)
+                          }
+                          .buttonStyle(.plain)
+                      }
+                      .padding(.horizontal, 20)
+                      .padding(.vertical, 16)
+                  }
+                  .navigationTitle("Projects [iOS18 PATCH]")
+              }
+
+              private var emptyProjectsMessage: LocalizedStringResource {
           """
 
           if text.count(anchor) != 1:
               raise SystemExit(
-                  f"Expected exactly one ProjectSessionSearchSection anchor, found {text.count(anchor)}; "
+                  f"Expected exactly one emptyProjectsMessage anchor, found {text.count(anchor)}; "
                   "refusing to patch changed upstream source."
               )
-          text = text.replace(anchor, helper)
+          text = text.replace(anchor, diagnostic)
 
           path.write_text(text)
           print(
-              "Applied iOS 18 Projects recent-sessions task patch: automatic loadRecentSessions task is "
-              "disabled on iOS 18 only; iOS 26+ keeps upstream behavior."
+              "Applied iOS 18 diagnostic Projects patch: iOS 18 uses a stripped-down ScrollView-based "
+              "Projects screen with a visible PATCH ACTIVE marker. iOS 26+ uses untouched upstream ProjectListView."
           )
           PY
 
