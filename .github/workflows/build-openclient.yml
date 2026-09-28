@@ -269,6 +269,8 @@ jobs:
                                       }
                                   }
                               }
+                              .toolbarBackground(Color(uiColor: .systemBackground), for: .navigationBar)
+                              .toolbarBackground(.visible, for: .navigationBar)
                               .toolbar {
                                   ToolbarItem(placement: .topBarLeading) {
                                       Button {
@@ -278,6 +280,17 @@ jobs:
                                       }
                                   }
                               }
+                              .simultaneousGesture(
+                                  DragGesture(minimumDistance: 12, coordinateSpace: .global)
+                                      .onEnded { value in
+                                          let startedAtLeftEdge = value.startLocation.x <= 28
+                                          let movedRight = value.translation.width >= 70
+                                          let mostlyHorizontal = abs(value.translation.width) > abs(value.translation.height) * 1.25
+                                          if startedAtLeftEdge && movedRight && mostlyHorizontal {
+                                              isIOS18CompatibilityDetailVisible = false
+                                          }
+                                      }
+                              )
                           } else if shell.isActivitySelected {
                               ActivityView(
                                   facade: shell.activity,
