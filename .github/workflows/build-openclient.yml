@@ -130,7 +130,7 @@ jobs:
           git diff --check
           git diff -- OpenCodeIOSClient/ProviderUsage/ProviderUsageCredentialRepository.swift
           
-      - name: Apply iOS 18 Projects navigation-title compatibility patch
+      - name: Apply iOS 18 Projects scroll clipping compatibility patch
         if: ${{ !inputs.disable_ios18_patch }}
         run: |
           python3 - <<'PY'
@@ -139,32 +139,40 @@ jobs:
           path = Path("OpenCodeIOSClient/Views/Projects/ProjectListView.swift")
           text = path.read_text()
 
+          # Remove the previous inline-title experiment if upstream still matches the
+          # original source shape. This build should test only scroll clipping.
           old_title = """.navigationTitle("Projects")
           """
-          new_title = """.navigationTitle("Projects")
-                  .modifier(ProjectListNavigationTitleCompatibility())
-          """
-
           if text.count(old_title) != 1:
               raise SystemExit(
                   f"Expected exactly one Projects navigationTitle, found {text.count(old_title)}; "
                   "refusing to patch changed upstream source."
               )
-          text = text.replace(old_title, new_title)
+
+          old_clip = """        .scrollClipDisabled()
+          """
+          new_clip = """        .modifier(ProjectListScrollClipCompatibility())
+          """
+          if text.count(old_clip) != 1:
+              raise SystemExit(
+                  f"Expected exactly one ProjectList .scrollClipDisabled(), found {text.count(old_clip)}; "
+                  "refusing to patch changed upstream source."
+              )
+          text = text.replace(old_clip, new_clip)
 
           anchor = """private struct ProjectSessionSearchSection: View {
           """
-          helper = """private struct ProjectListNavigationTitleCompatibility: ViewModifier {
+          helper = """private struct ProjectListScrollClipCompatibility: ViewModifier {
               @ViewBuilder
               func body(content: Content) -> some View {
           #if os(iOS) && !targetEnvironment(macCatalyst)
                   if ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 18 {
-                      content.navigationBarTitleDisplayMode(.inline)
-                  } else {
                       content
+                  } else {
+                      content.scrollClipDisabled()
                   }
           #else
-                  content
+                  content.scrollClipDisabled()
           #endif
               }
           }
@@ -181,8 +189,8 @@ jobs:
 
           path.write_text(text)
           print(
-              "Applied iOS 18 Projects navigation-title patch: inline title on iOS 18 only; "
-              "iOS 26+ keeps upstream large-title behavior."
+              "Applied iOS 18 Projects scroll-clipping patch: scrollClipDisabled is omitted on iOS 18 only; "
+              "iOS 26+ keeps upstream behavior."
           )
           PY
 
