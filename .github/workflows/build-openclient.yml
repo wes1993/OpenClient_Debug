@@ -10,6 +10,21 @@ on:
         required: false
         default: false
         type: boolean
+      disable_swift_workaround:
+        description: "Disable Swift compiler workaround (use upstream code as-is)"
+        required: false
+        default: false
+        type: boolean
+      disable_ios18_patch:
+        description: "Disable iOS 18 Projects list patch (use upstream code as-is)"
+        required: false
+        default: false
+        type: boolean
+      disable_keychain_patch:
+        description: "Disable SideStore Keychain patch (use upstream code as-is)"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -66,6 +81,7 @@ jobs:
         run: xcodegen generate
 
       - name: Apply SideStore private Keychain compatibility patch
+        if: ${{ !inputs.disable_keychain_patch }}
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -115,6 +131,7 @@ jobs:
           git diff -- OpenCodeIOSClient/ProviderUsage/ProviderUsageCredentialRepository.swift
           
       - name: Apply iOS 18 Projects list runtime compatibility patch
+        if: ${{ !inputs.disable_ios18_patch }}
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -169,6 +186,8 @@ jobs:
           git diff -- OpenCodeIOSClient/Views/Projects/ProjectListView.swift
 
       - name: Build Debug app
+        env:
+          DISABLE_SWIFT_WORKAROUND: ${{ inputs.disable_swift_workaround || false }}
         run: |
           set -o pipefail
 
@@ -188,6 +207,11 @@ jobs:
           if ! grep -q "compiler is unable to type-check this expression in reasonable time" "$RUNNER_TEMP/openclient-build.log" || \
              ! grep -q "NewProjectChatFacade.swift" "$RUNNER_TEMP/openclient-build.log"; then
             echo "::error::Normal build failed for an unrelated reason; temporary workaround not applied."
+            exit 1
+          fi
+
+          if [ "$DISABLE_SWIFT_WORKAROUND" = "true" ]; then
+            echo "::error::Known NewProjectChatFacade Swift type-checker failure detected, but the Swift workaround was disabled by workflow input."
             exit 1
           fi
 
