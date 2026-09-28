@@ -114,6 +114,60 @@ jobs:
           git diff --check
           git diff -- OpenCodeIOSClient/ProviderUsage/ProviderUsageCredentialRepository.swift
           
+      - name: Apply iOS 18 Projects list runtime compatibility patch
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("OpenCodeIOSClient/Views/Projects/ProjectListView.swift")
+          text = path.read_text()
+
+          old_style = """        .listStyle(.sidebar)
+          """
+          new_style = """        .modifier(ProjectListRuntimeListStyleModifier())
+          """
+
+          if text.count(old_style) != 1:
+              raise SystemExit(
+                  f"Expected exactly one ProjectList .listStyle(.sidebar), found {text.count(old_style)}; "
+                  "refusing to patch changed upstream source."
+              )
+
+          anchor = """private struct ProjectSessionSearchSection: View {
+          """
+          helper = """private struct ProjectListRuntimeListStyleModifier: ViewModifier {
+              @ViewBuilder
+              func body(content: Content) -> some View {
+          #if os(iOS) && !targetEnvironment(macCatalyst)
+                  if ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 18 {
+                      content.listStyle(.insetGrouped)
+                  } else {
+                      content.listStyle(.sidebar)
+                  }
+          #else
+                  content.listStyle(.sidebar)
+          #endif
+              }
+          }
+
+          private struct ProjectSessionSearchSection: View {
+          """
+
+          if text.count(anchor) != 1:
+              raise SystemExit(
+                  f"Expected exactly one ProjectSessionSearchSection anchor, found {text.count(anchor)}; "
+                  "refusing to patch changed upstream source."
+              )
+
+          text = text.replace(old_style, new_style)
+          text = text.replace(anchor, helper)
+          path.write_text(text)
+          print("Applied runtime Projects List style patch: iOS 18=insetGrouped, other OS versions=sidebar.")
+          PY
+
+          git diff --check
+          git diff -- OpenCodeIOSClient/Views/Projects/ProjectListView.swift
+
       - name: Build Debug app
         run: |
           set -o pipefail
