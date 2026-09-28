@@ -146,6 +146,12 @@ jobs:
           #if os(iOS)
           import UIKit
           #endif
+
+          private enum IOS18CompatibilityRoute: Hashable {
+              case activity
+              case project
+              case detail
+          }
           """
           if root.count(old_import) != 1:
               raise SystemExit(
@@ -157,8 +163,7 @@ jobs:
           old_state = """    @State private var didRunUITestAutoConnect = false
           """
           new_state = """    @State private var didRunUITestAutoConnect = false
-              @State private var isIOS18ProjectsRootVisible = false
-              @State private var isIOS18CompatibilityDetailVisible = false
+              @State private var ios18NavigationPath: [IOS18CompatibilityRoute] = []
           """
           if root.count(old_state) != 1:
               raise SystemExit(
@@ -181,128 +186,91 @@ jobs:
           new_app_shell = """    @ViewBuilder
               private var appShell: some View {
                   if isIOS18NavigationCompatibilityActive {
-                      NavigationStack {
-                          if isIOS18ProjectsRootVisible {
-                              ProjectListView(
-                                  facade: shell.projects,
-                                  connection: shell.connection,
-                                  configurations: shell.configurations,
-                                  games: shell.funAndGames,
-                                  bridge: bridge,
-                                  providerUsage: shell.providerUsage,
-                                  isActivitySelected: false,
-                                  onActivityChosen: {
-                                      isIOS18CompatibilityDetailVisible = false
-                                      isIOS18ProjectsRootVisible = false
-                                      shell.selectActivity()
+                      NavigationStack(path: $ios18NavigationPath) {
+                          ProjectListView(
+                              facade: shell.projects,
+                              connection: shell.connection,
+                              configurations: shell.configurations,
+                              games: shell.funAndGames,
+                              bridge: bridge,
+                              providerUsage: shell.providerUsage,
+                              isActivitySelected: false,
+                              onActivityChosen: {
+                                  shell.selectActivity()
+                                  if ios18NavigationPath.last != .activity {
+                                      ios18NavigationPath.append(.activity)
                                   }
-                              ) {
-                                  guard shell.hasCurrentProject else { return }
-                                  isIOS18CompatibilityDetailVisible = false
-                                  isIOS18ProjectsRootVisible = false
-                                  shell.selectProjectContent()
                               }
-                          } else if isIOS18CompatibilityDetailVisible {
-                              BrowserInspectorContainer(
-                                  browser: shell.browser,
-                                  isEnabled: false
-                              ) {
-                                  offlineBannerColumn(.detail) {
-                                      switch shell.detailRoute(isCompact: true) {
-                                      case .gitDiff:
-                                          GitDiffView(facade: shell.projectFiles)
-                                      case .gitFile:
-                                          ProjectFileContentView(facade: shell.projectFiles)
-                                      case .mcp:
-                                          ContentUnavailableView(
-                                              "MCP Servers",
-                                              systemImage: "server.rack",
-                                              description: Text("Toggle servers from the MCP tab.")
-                                          )
-                                      case let .terminal(id):
-                                          TerminalDetailView(facade: shell.terminal, terminalID: id)
-                                              .id(id)
-                                      case .selectTerminal:
-                                          ContentUnavailableView(
-                                              "Select a Terminal",
-                                              systemImage: "terminal",
-                                              description: Text("Choose a terminal session from the list.")
-                                          )
-                                      case let .loadingChat(sessionID):
-                                          CompactRouteLoadingView(title: "Loading chat...")
-                                              .id(sessionID)
-                                      case let .chat(route):
-                                          ChatRouteView(route: route, destination: chatDestination)
-                                              .equatable()
-                                              .transition(.identity)
-                                      case .selectSession:
-                                          ContentUnavailableView(
-                                              "Select a Session",
-                                              systemImage: "bubble.left.and.bubble.right"
-                                          )
+                          ) {
+                              guard shell.hasCurrentProject else { return }
+                              shell.selectProjectContent()
+                              if ios18NavigationPath.last != .project {
+                                  ios18NavigationPath.append(.project)
+                              }
+                          }
+                          .navigationDestination(for: IOS18CompatibilityRoute.self) { route in
+                              switch route {
+                              case .activity:
+                                  ActivityView(
+                                      facade: shell.activity,
+                                      connection: shell.connection,
+                                      providerUsage: shell.providerUsage,
+                                      configurations: shell.configurations,
+                                      bridge: bridge
+                                  ) {
+                                      if ios18NavigationPath.last != .detail {
+                                          ios18NavigationPath.append(.detail)
                                       }
                                   }
-                              }
-                              .toolbar {
-                                  ToolbarItem(placement: .topBarLeading) {
-                                      Button {
-                                          isIOS18CompatibilityDetailVisible = false
-                                      } label: {
-                                          Image(systemName: "chevron.left")
+
+                              case .project:
+                                  ProjectContentView(shell: shell, bridge: bridge) {
+                                      if ios18NavigationPath.last != .detail {
+                                          ios18NavigationPath.append(.detail)
                                       }
                                   }
-                              }
-                          } else if shell.isActivitySelected {
-                              ActivityView(
-                                  facade: shell.activity,
-                                  connection: shell.connection,
-                                  providerUsage: shell.providerUsage,
-                                  configurations: shell.configurations,
-                                  bridge: bridge
-                              ) {
-                                  isIOS18CompatibilityDetailVisible = true
-                              }
-                              .toolbar {
-                                  ToolbarItem(placement: .topBarLeading) {
-                                      Button {
-                                          isIOS18CompatibilityDetailVisible = false
-                                          isIOS18ProjectsRootVisible = true
-                                      } label: {
-                                          Label("Projects", systemImage: "chevron.left")
+
+                              case .detail:
+                                  BrowserInspectorContainer(
+                                      browser: shell.browser,
+                                      isEnabled: false
+                                  ) {
+                                      offlineBannerColumn(.detail) {
+                                          switch shell.detailRoute(isCompact: true) {
+                                          case .gitDiff:
+                                              GitDiffView(facade: shell.projectFiles)
+                                          case .gitFile:
+                                              ProjectFileContentView(facade: shell.projectFiles)
+                                          case .mcp:
+                                              ContentUnavailableView(
+                                                  "MCP Servers",
+                                                  systemImage: "server.rack",
+                                                  description: Text("Toggle servers from the MCP tab.")
+                                              )
+                                          case let .terminal(id):
+                                              TerminalDetailView(facade: shell.terminal, terminalID: id)
+                                                  .id(id)
+                                          case .selectTerminal:
+                                              ContentUnavailableView(
+                                                  "Select a Terminal",
+                                                  systemImage: "terminal",
+                                                  description: Text("Choose a terminal session from the list.")
+                                              )
+                                          case let .loadingChat(sessionID):
+                                              CompactRouteLoadingView(title: "Loading chat...")
+                                                  .id(sessionID)
+                                          case let .chat(route):
+                                              ChatRouteView(route: route, destination: chatDestination)
+                                                  .equatable()
+                                                  .transition(.identity)
+                                          case .selectSession:
+                                              ContentUnavailableView(
+                                                  "Select a Session",
+                                                  systemImage: "bubble.left.and.bubble.right"
+                                              )
+                                          }
                                       }
                                   }
-                              }
-                          } else if shell.hasCurrentProject {
-                              ProjectContentView(shell: shell, bridge: bridge) {
-                                  isIOS18CompatibilityDetailVisible = true
-                              }
-                              .toolbar {
-                                  ToolbarItem(placement: .topBarLeading) {
-                                      Button {
-                                          isIOS18CompatibilityDetailVisible = false
-                                          isIOS18ProjectsRootVisible = true
-                                      } label: {
-                                          Label("Projects", systemImage: "chevron.left")
-                                      }
-                                  }
-                              }
-                          } else {
-                              ProjectListView(
-                                  facade: shell.projects,
-                                  connection: shell.connection,
-                                  configurations: shell.configurations,
-                                  games: shell.funAndGames,
-                                  bridge: bridge,
-                                  providerUsage: shell.providerUsage,
-                                  isActivitySelected: false,
-                                  onActivityChosen: {
-                                      isIOS18CompatibilityDetailVisible = false
-                                      shell.selectActivity()
-                                  }
-                              ) {
-                                  guard shell.hasCurrentProject else { return }
-                                  isIOS18CompatibilityDetailVisible = false
-                                  shell.selectProjectContent()
                               }
                           }
                       }
@@ -310,12 +278,18 @@ jobs:
                       .toolbarBackground(.visible, for: .navigationBar)
                       .onAppear {
                           configureIOS18OpaqueNavigationBar()
+                          syncIOS18NavigationPathToShell()
+                      }
+                      .onChange(of: shell.isActivitySelected) { _, _ in
+                          syncIOS18NavigationPathToShell()
+                      }
+                      .onChange(of: shell.hasCurrentProject) { _, _ in
+                          syncIOS18NavigationPathToShell()
                       }
                       .onChange(of: shell.selectedSessionID) { _, sessionID in
-                          if sessionID != nil, shell.canPresentSelectedSessionDetail {
-                              isIOS18CompatibilityDetailVisible = true
-                          } else if sessionID == nil {
-                              isIOS18CompatibilityDetailVisible = false
+                          guard sessionID != nil, shell.canPresentSelectedSessionDetail else { return }
+                          if ios18NavigationPath.last != .detail {
+                              ios18NavigationPath.append(.detail)
                           }
                       }
                   } else {
@@ -338,7 +312,29 @@ jobs:
 
           root_anchor = """    private var usesBrowserInspector: Bool {
           """
-          root_helper = """    private func configureIOS18OpaqueNavigationBar() {
+          root_helper = """    private func syncIOS18NavigationPathToShell() {
+                  if shell.isActivitySelected {
+                      if ios18NavigationPath.isEmpty {
+                          ios18NavigationPath = [.activity]
+                      } else if ios18NavigationPath.first != .activity {
+                          ios18NavigationPath = [.activity]
+                      }
+                      return
+                  }
+
+                  if shell.hasCurrentProject {
+                      if ios18NavigationPath.isEmpty {
+                          ios18NavigationPath = [.project]
+                      } else if ios18NavigationPath.first != .project {
+                          ios18NavigationPath = [.project]
+                      }
+                      return
+                  }
+
+                  ios18NavigationPath = []
+              }
+
+              private func configureIOS18OpaqueNavigationBar() {
           #if os(iOS) && !targetEnvironment(macCatalyst)
                   guard ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 18 else { return }
 
