@@ -130,141 +130,63 @@ jobs:
           git diff --check
           git diff -- OpenCodeIOSClient/ProviderUsage/ProviderUsageCredentialRepository.swift
           
-      - name: Apply iOS 18 navigation/layout runtime compatibility patch
+      - name: Apply iOS 18 Projects navigation-title compatibility patch
         if: ${{ !inputs.disable_ios18_patch }}
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
-          # --- RootView split-view compatibility patch ---
-          root_path = Path("OpenCodeIOSClient/Views/Root/RootView.swift")
-          root = root_path.read_text()
+          path = Path("OpenCodeIOSClient/Views/Projects/ProjectListView.swift")
+          text = path.read_text()
 
-          old_split = "NavigationSplitView(columnVisibility: $columnVisibility, preferredCompactColumn: $preferredCompactColumn)"
-          new_split = "NavigationSplitView(columnVisibility: columnVisibilityBinding, preferredCompactColumn: preferredCompactColumnBinding)"
-          if root.count(old_split) != 1:
-              raise SystemExit(
-                  f"Expected exactly one NavigationSplitView root initializer, found {root.count(old_split)}; "
-                  "refusing to patch changed upstream source."
-              )
-          root = root.replace(old_split, new_split)
-
-          needle = "withAnimation(opencodeSelectionAnimation)"
-          count = root.count(needle)
-          if count < 4:
-              raise SystemExit(
-                  f"Expected multiple RootView navigation animations, found {count}; "
-                  "refusing to patch changed upstream source."
-              )
-          root = root.replace(
-              needle,
-              "withAnimation(isIOS18Runtime ? nil : opencodeSelectionAnimation)"
-          )
-
-          old_animation = ".animation(opencodeSelectionAnimation, value: shell.hasActiveWorkspace)"
-          new_animation = ".animation(isIOS18Runtime ? nil : opencodeSelectionAnimation, value: shell.hasActiveWorkspace)"
-          if root.count(old_animation) != 1:
-              raise SystemExit(
-                  f"Expected exactly one workspace animation modifier, found {root.count(old_animation)}; "
-                  "refusing to patch changed upstream source."
-              )
-          root = root.replace(old_animation, new_animation)
-
-          root_anchor = """    private var usesBrowserInspector: Bool {
+          old_title = """.navigationTitle("Projects")
           """
-          root_helper = """    private var isIOS18Runtime: Bool {
+          new_title = """.navigationTitle("Projects")
+                  .modifier(ProjectListNavigationTitleCompatibility())
+          """
+
+          if text.count(old_title) != 1:
+              raise SystemExit(
+                  f"Expected exactly one Projects navigationTitle, found {text.count(old_title)}; "
+                  "refusing to patch changed upstream source."
+              )
+          text = text.replace(old_title, new_title)
+
+          anchor = """private struct ProjectSessionSearchSection: View {
+          """
+          helper = """private struct ProjectListNavigationTitleCompatibility: ViewModifier {
+              @ViewBuilder
+              func body(content: Content) -> some View {
           #if os(iOS) && !targetEnvironment(macCatalyst)
-              ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 18
+                  if ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 18 {
+                      content.navigationBarTitleDisplayMode(.inline)
+                  } else {
+                      content
+                  }
           #else
-              false
+                  content
           #endif
+              }
           }
 
-              // iOS 18 can repeatedly write transient split-view state back through
-              // NavigationSplitView while the root page is visible. Keep OpenClient's
-              // own direct state changes, but ignore framework-originated writes on iOS 18.
-              private var columnVisibilityBinding: Binding<NavigationSplitViewVisibility> {
-                  Binding(
-                      get: { columnVisibility },
-                      set: { newValue in
-                          guard !isIOS18Runtime else { return }
-                          columnVisibility = newValue
-                      }
-                  )
-              }
-
-              private var preferredCompactColumnBinding: Binding<NavigationSplitViewColumn> {
-                  Binding(
-                      get: { preferredCompactColumn },
-                      set: { newValue in
-                          guard !isIOS18Runtime else { return }
-                          preferredCompactColumn = newValue
-                      }
-                  )
-              }
-
-              private var usesBrowserInspector: Bool {
+          private struct ProjectSessionSearchSection: View {
           """
-          if root.count(root_anchor) != 1:
+
+          if text.count(anchor) != 1:
               raise SystemExit(
-                  f"Expected exactly one usesBrowserInspector anchor, found {root.count(root_anchor)}; "
+                  f"Expected exactly one ProjectSessionSearchSection anchor, found {text.count(anchor)}; "
                   "refusing to patch changed upstream source."
               )
-          root = root.replace(root_anchor, root_helper)
-          root_path.write_text(root)
+          text = text.replace(anchor, helper)
 
-          # --- ProjectListView animation compatibility patch ---
-          project_path = Path("OpenCodeIOSClient/Views/Projects/ProjectListView.swift")
-          project = project_path.read_text()
-
-          old_selected = ".animation(opencodeSelectionAnimation, value: snapshot.selectedDirectory)"
-          new_selected = ".animation(projectListRuntimeAnimation, value: snapshot.selectedDirectory)"
-          if project.count(old_selected) != 1:
-              raise SystemExit(
-                  f"Expected exactly one selectedDirectory animation, found {project.count(old_selected)}; "
-                  "refusing to patch changed upstream source."
-              )
-          project = project.replace(old_selected, new_selected)
-
-          old_projects = ".animation(opencodeSelectionAnimation, value: projectIDs)"
-          new_projects = ".animation(projectListRuntimeAnimation, value: projectIDs)"
-          if project.count(old_projects) != 1:
-              raise SystemExit(
-                  f"Expected exactly one projectIDs animation, found {project.count(old_projects)}; "
-                  "refusing to patch changed upstream source."
-              )
-          project = project.replace(old_projects, new_projects)
-
-          project_anchor = """    private var projectListRowInsets: EdgeInsets? {
-          """
-          project_helper = """    private var projectListRuntimeAnimation: Animation? {
-          #if os(iOS) && !targetEnvironment(macCatalyst)
-              if ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 18 {
-                  return nil
-              }
-          #endif
-              return opencodeSelectionAnimation
-          }
-
-              private var projectListRowInsets: EdgeInsets? {
-          """
-          if project.count(project_anchor) != 1:
-              raise SystemExit(
-                  f"Expected exactly one projectListRowInsets anchor, found {project.count(project_anchor)}; "
-                  "refusing to patch changed upstream source."
-              )
-          project = project.replace(project_anchor, project_helper)
-          project_path.write_text(project)
-
+          path.write_text(text)
           print(
-              "Applied iOS 18 runtime patch: split-view framework writes and route animations are "
-              "suppressed on iOS 18, and ProjectListView selectedDirectory/projectIDs animations are "
-              "disabled there only. iOS 26+ keeps upstream behavior."
+              "Applied iOS 18 Projects navigation-title patch: inline title on iOS 18 only; "
+              "iOS 26+ keeps upstream large-title behavior."
           )
           PY
 
           git diff --check
-          git diff -- OpenCodeIOSClient/Views/Root/RootView.swift
           git diff -- OpenCodeIOSClient/Views/Projects/ProjectListView.swift
 
       - name: Build Debug app
