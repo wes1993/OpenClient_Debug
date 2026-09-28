@@ -135,46 +135,6 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import os
-
-          run_number = os.environ.get("GITHUB_RUN_NUMBER", "unknown")
-
-          # Keep ProjectListView upstream-identical in structure/behavior.
-          # Add only a non-layout-affecting diagnostic overlay so we can confirm
-          # that the iOS 18 runtime branch and exact GitHub Actions revision are active.
-          project_path = Path("OpenCodeIOSClient/Views/Projects/ProjectListView.swift")
-          project = project_path.read_text()
-
-          old_body = """    var body: some View {
-                  projectListContent
-              }
-          """
-          new_body = """    var body: some View {
-                  projectListContent
-                      .overlay(alignment: .topLeading) {
-                          if ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 18 {
-                              Text(verbatim: "iOS 18 PATCH ACTIVE • GitHub Action r__GITHUB_ACTION_REV__")
-                                  .font(.caption2.weight(.bold))
-                                  .foregroundStyle(.red)
-                                  .padding(.horizontal, 8)
-                                  .padding(.vertical, 4)
-                                  .background(.ultraThinMaterial, in: Capsule())
-                                  .padding(.leading, 8)
-                                  .allowsHitTesting(false)
-                                  .zIndex(999)
-                          }
-                      }
-              }
-          """
-
-          if project.count(old_body) != 1:
-              raise SystemExit(
-                  f"Expected exactly one upstream ProjectListView body block, found {project.count(old_body)}; "
-                  "refusing to patch changed upstream source."
-              )
-          project = project.replace(old_body, new_body.replace("__GITHUB_ACTION_REV__", run_number))
-          project_path.write_text(project)
-
           # iOS 18 compatibility fix: bypass NavigationSplitView entirely.
           # iOS 26+ continues through the untouched upstream splitShell.
           root_path = Path("OpenCodeIOSClient/Views/Root/RootView.swift")
@@ -391,13 +351,12 @@ jobs:
           root_path.write_text(root)
 
           print(
-              "Applied iOS 18 navigation compatibility patch: ProjectListView remains upstream except "
-              "for a diagnostic overlay; NavigationSplitView is bypassed on iOS 18 only."
+              "Applied iOS 18 navigation compatibility patch: NavigationSplitView is bypassed "
+              "on iOS 18 only; ProjectListView remains upstream."
           )
           PY
 
           git diff --check
-          git diff -- OpenCodeIOSClient/Views/Projects/ProjectListView.swift
           git diff -- OpenCodeIOSClient/Views/Root/RootView.swift
 
       - name: Build Debug app
