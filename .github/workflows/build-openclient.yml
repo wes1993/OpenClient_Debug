@@ -146,6 +146,64 @@ jobs:
           #if os(iOS)
           import UIKit
           #endif
+
+          #if os(iOS) && !targetEnvironment(macCatalyst)
+          private struct IOS18BackEdgeGesture: UIViewRepresentable {
+              let onBack: () -> Void
+
+              func makeCoordinator() -> Coordinator {
+                  Coordinator(onBack: onBack)
+              }
+
+              func makeUIView(context: Context) -> UIView {
+                  let view = UIView(frame: .zero)
+                  view.backgroundColor = .clear
+                  view.isUserInteractionEnabled = true
+
+                  let recognizer = UIScreenEdgePanGestureRecognizer(
+                      target: context.coordinator,
+                      action: #selector(Coordinator.handle(_:))
+                  )
+                  recognizer.edges = .left
+                  recognizer.cancelsTouchesInView = false
+                  recognizer.delaysTouchesBegan = false
+                  recognizer.delegate = context.coordinator
+                  view.addGestureRecognizer(recognizer)
+
+                  return view
+              }
+
+              func updateUIView(_ uiView: UIView, context: Context) {
+                  context.coordinator.onBack = onBack
+              }
+
+              final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+                  var onBack: () -> Void
+
+                  init(onBack: @escaping () -> Void) {
+                      self.onBack = onBack
+                  }
+
+                  @objc func handle(_ recognizer: UIScreenEdgePanGestureRecognizer) {
+                      guard recognizer.state == .ended,
+                            let view = recognizer.view else { return }
+
+                      let translation = recognizer.translation(in: view)
+                      let velocity = recognizer.velocity(in: view)
+                      if translation.x >= 70 || velocity.x >= 500 {
+                          onBack()
+                      }
+                  }
+
+                  func gestureRecognizer(
+                      _ gestureRecognizer: UIGestureRecognizer,
+                      shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+                  ) -> Bool {
+                      true
+                  }
+              }
+          }
+          #endif
           """
           if root.count(old_import) != 1:
               raise SystemExit(
@@ -252,17 +310,12 @@ jobs:
                                       }
                                   }
                               }
-                              .simultaneousGesture(
-                                  DragGesture(minimumDistance: 12, coordinateSpace: .global)
-                                      .onEnded { value in
-                                          let startedAtLeftEdge = value.startLocation.x <= 28
-                                          let movedRight = value.translation.width >= 70
-                                          let mostlyHorizontal = abs(value.translation.width) > abs(value.translation.height) * 1.25
-                                          if startedAtLeftEdge && movedRight && mostlyHorizontal {
-                                              isIOS18CompatibilityDetailVisible = false
-                                          }
-                                      }
-                              )
+                              .overlay {
+                                  IOS18BackEdgeGesture {
+                                      isIOS18CompatibilityDetailVisible = false
+                                  }
+                                  .allowsHitTesting(true)
+                              }
                           } else if shell.isActivitySelected {
                               ActivityView(
                                   facade: shell.activity,
