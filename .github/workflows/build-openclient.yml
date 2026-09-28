@@ -140,7 +140,7 @@ jobs:
           text = path.read_text()
 
           old_split = "NavigationSplitView(columnVisibility: $columnVisibility, preferredCompactColumn: $preferredCompactColumn)"
-          new_split = "NavigationSplitView(columnVisibility: $columnVisibility, preferredCompactColumn: preferredCompactColumnBinding)"
+          new_split = "NavigationSplitView(columnVisibility: columnVisibilityBinding, preferredCompactColumn: preferredCompactColumnBinding)"
           if text.count(old_split) != 1:
               raise SystemExit(
                   f"Expected exactly one NavigationSplitView root initializer, found {text.count(old_split)}; "
@@ -179,9 +179,19 @@ jobs:
           #endif
           }
 
-              // iOS 18 can repeatedly write transient compact-column values back through
-              // NavigationSplitView while the sidebar is becoming visible. Keep the app's
-              // own direct state changes, but ignore those framework-originated writes.
+              // iOS 18 can repeatedly write transient split-view state back through
+              // NavigationSplitView while the root page is visible. Keep OpenClient's
+              // own direct state changes, but ignore framework-originated writes on iOS 18.
+              private var columnVisibilityBinding: Binding<NavigationSplitViewVisibility> {
+                  Binding(
+                      get: { columnVisibility },
+                      set: { newValue in
+                          guard !isIOS18Runtime else { return }
+                          columnVisibility = newValue
+                      }
+                  )
+              }
+
               private var preferredCompactColumnBinding: Binding<NavigationSplitViewColumn> {
                   Binding(
                       get: { preferredCompactColumn },
@@ -203,9 +213,9 @@ jobs:
 
           path.write_text(text)
           print(
-              "Applied iOS 18 runtime navigation patch: framework writes to preferredCompactColumn "
-              "are ignored on iOS 18 and split-view route animations are disabled there only. "
-              "iOS 26+ keeps upstream behavior."
+              "Applied iOS 18 runtime navigation patch: framework writes to columnVisibility "
+              "and preferredCompactColumn are ignored on iOS 18, and split-view route animations "
+              "are disabled there only. iOS 26+ keeps upstream behavior."
           )
           PY
 
