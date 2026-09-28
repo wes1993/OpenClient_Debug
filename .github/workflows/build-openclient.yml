@@ -130,7 +130,7 @@ jobs:
           git diff --check
           git diff -- OpenCodeIOSClient/ProviderUsage/ProviderUsageCredentialRepository.swift
           
-      - name: Apply iOS 18 Projects scroll clipping compatibility patch
+      - name: Apply iOS 18 Projects header layout compatibility patch
         if: ${{ !inputs.disable_ios18_patch }}
         run: |
           python3 - <<'PY'
@@ -139,58 +139,54 @@ jobs:
           path = Path("OpenCodeIOSClient/Views/Projects/ProjectListView.swift")
           text = path.read_text()
 
-          # Remove the previous inline-title experiment if upstream still matches the
-          # original source shape. This build should test only scroll clipping.
-          old_title = """.navigationTitle("Projects")
+          old_padding = """        .padding(.leading, -16)
+              .padding(.trailing, -29)
           """
-          if text.count(old_title) != 1:
+          new_padding = """        .modifier(ProjectListSectionHeaderPaddingCompatibility())
+          """
+
+          if text.count(old_padding) != 1:
               raise SystemExit(
-                  f"Expected exactly one Projects navigationTitle, found {text.count(old_title)}; "
+                  f"Expected exactly one ProjectListSectionHeader negative-padding block, found {text.count(old_padding)}; "
                   "refusing to patch changed upstream source."
               )
+          text = text.replace(old_padding, new_padding)
 
-          old_clip = """        .scrollClipDisabled()
+          anchor = """private enum ProjectListLayout {
           """
-          new_clip = """        .modifier(ProjectListScrollClipCompatibility())
-          """
-          if text.count(old_clip) != 1:
-              raise SystemExit(
-                  f"Expected exactly one ProjectList .scrollClipDisabled(), found {text.count(old_clip)}; "
-                  "refusing to patch changed upstream source."
-              )
-          text = text.replace(old_clip, new_clip)
-
-          anchor = """private struct ProjectSessionSearchSection: View {
-          """
-          helper = """private struct ProjectListScrollClipCompatibility: ViewModifier {
+          helper = """private struct ProjectListSectionHeaderPaddingCompatibility: ViewModifier {
               @ViewBuilder
               func body(content: Content) -> some View {
           #if os(iOS) && !targetEnvironment(macCatalyst)
                   if ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 18 {
                       content
                   } else {
-                      content.scrollClipDisabled()
+                      content
+                          .padding(.leading, -16)
+                          .padding(.trailing, -29)
                   }
           #else
-                  content.scrollClipDisabled()
+                  content
+                      .padding(.leading, -16)
+                      .padding(.trailing, -29)
           #endif
               }
           }
 
-          private struct ProjectSessionSearchSection: View {
+          private enum ProjectListLayout {
           """
 
           if text.count(anchor) != 1:
               raise SystemExit(
-                  f"Expected exactly one ProjectSessionSearchSection anchor, found {text.count(anchor)}; "
+                  f"Expected exactly one ProjectListLayout anchor, found {text.count(anchor)}; "
                   "refusing to patch changed upstream source."
               )
           text = text.replace(anchor, helper)
 
           path.write_text(text)
           print(
-              "Applied iOS 18 Projects scroll-clipping patch: scrollClipDisabled is omitted on iOS 18 only; "
-              "iOS 26+ keeps upstream behavior."
+              "Applied iOS 18 Projects header-layout patch: negative section-header paddings are omitted "
+              "on iOS 18 only; iOS 26+ keeps upstream behavior."
           )
           PY
 
