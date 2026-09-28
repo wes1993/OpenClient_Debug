@@ -135,7 +135,9 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import os
 
+          run_number = os.environ.get("GITHUB_RUN_NUMBER", "unknown")
           path = Path("OpenCodeIOSClient/Views/Projects/ProjectListView.swift")
           text = path.read_text()
 
@@ -175,7 +177,7 @@ jobs:
 
                   ScrollView {
                       VStack(alignment: .leading, spacing: 16) {
-                          Text("iOS 18 PATCH ACTIVE")
+                          Text("iOS 18 PATCH ACTIVE • GitHub Action r__GITHUB_ACTION_REV__")
                               .font(.headline.weight(.bold))
                               .foregroundStyle(.red)
                               .frame(maxWidth: .infinity, alignment: .leading)
@@ -255,6 +257,8 @@ jobs:
 
               private var emptyProjectsMessage: LocalizedStringResource {
           """
+
+          diagnostic = diagnostic.replace("__GITHUB_ACTION_REV__", run_number)
 
           if text.count(anchor) != 1:
               raise SystemExit(
