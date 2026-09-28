@@ -309,10 +309,14 @@ jobs:
         run: |
           set -euo pipefail
           TAG="openclient-${UPSTREAM_SHA:0:12}"
-          gh release view "$TAG" --repo wes1993/OpenClient_Debug >/dev/null 2>&1 || \
+          if gh release view "$TAG" --repo wes1993/OpenClient_Debug >/dev/null 2>&1; then
+            echo "Release $TAG already exists; replacing IPA asset with this build."
+            gh release upload "$TAG" OpenClient-Debug.ipa --repo wes1993/OpenClient_Debug --clobber
+          else
             gh release create "$TAG" OpenClient-Debug.ipa --repo wes1993/OpenClient_Debug \
               --title "OpenClient Debug $APP_VERSION ($APP_BUILD)" \
               --notes "Automated Debug build from upstream commit $UPSTREAM_SHA."
+          fi
 
       - name: Update AltStore catalog
         env:
@@ -388,4 +392,9 @@ jobs:
           git config user.email github-actions@github.com
           git add state/upstream-sha.txt
           git commit -m "Record upstream $UPSTREAM_SHA" || true
+
+          # The automation repository may have changed while this long macOS build was running
+          # (for example when a workflow patch is committed). Rebase before pushing so a
+          # harmless concurrent workflow edit does not make an otherwise successful build fail.
+          git pull --rebase origin main
           git push
