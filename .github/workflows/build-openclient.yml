@@ -273,6 +273,18 @@ jobs:
           root_path = Path("OpenCodeIOSClient/Views/Root/RootView.swift")
           root = root_path.read_text()
 
+          old_state = """    @State private var didRunUITestAutoConnect = false
+          """
+          new_state = """    @State private var didRunUITestAutoConnect = false
+              @State private var isIOS18DiagnosticProjectsRootVisible = false
+          """
+          if root.count(old_state) != 1:
+              raise SystemExit(
+                  f"Expected exactly one RootView diagnostic state anchor, found {root.count(old_state)}; "
+                  "refusing to patch changed upstream source."
+              )
+          root = root.replace(old_state, new_state)
+
           old_app_shell = """    @ViewBuilder
               private var appShell: some View {
                   BrowserRootContainer(
@@ -288,7 +300,25 @@ jobs:
               private var appShell: some View {
                   if isIOS18RootNavigationDiagnostic {
                       NavigationStack {
-                          if shell.isActivitySelected {
+                          if isIOS18DiagnosticProjectsRootVisible {
+                              ProjectListView(
+                                  facade: shell.projects,
+                                  connection: shell.connection,
+                                  configurations: shell.configurations,
+                                  games: shell.funAndGames,
+                                  bridge: bridge,
+                                  providerUsage: shell.providerUsage,
+                                  isActivitySelected: false,
+                                  onActivityChosen: {
+                                      isIOS18DiagnosticProjectsRootVisible = false
+                                      shell.selectActivity()
+                                  }
+                              ) {
+                                  guard shell.hasCurrentProject else { return }
+                                  isIOS18DiagnosticProjectsRootVisible = false
+                                  shell.selectProjectContent()
+                              }
+                          } else if shell.isActivitySelected {
                               ActivityView(
                                   facade: shell.activity,
                                   connection: shell.connection,
@@ -298,9 +328,27 @@ jobs:
                               ) {
                                   // Detail navigation is intentionally omitted in this diagnostic branch.
                               }
+                              .toolbar {
+                                  ToolbarItem(placement: .topBarLeading) {
+                                      Button {
+                                          isIOS18DiagnosticProjectsRootVisible = true
+                                      } label: {
+                                          Label("Projects", systemImage: "chevron.left")
+                                      }
+                                  }
+                              }
                           } else if shell.hasCurrentProject {
                               ProjectContentView(shell: shell, bridge: bridge) {
                                   // Detail navigation is intentionally omitted in this diagnostic branch.
+                              }
+                              .toolbar {
+                                  ToolbarItem(placement: .topBarLeading) {
+                                      Button {
+                                          isIOS18DiagnosticProjectsRootVisible = true
+                                      } label: {
+                                          Label("Projects", systemImage: "chevron.left")
+                                      }
+                                  }
                               }
                           } else {
                               ProjectListView(
@@ -310,7 +358,7 @@ jobs:
                                   games: shell.funAndGames,
                                   bridge: bridge,
                                   providerUsage: shell.providerUsage,
-                                  isActivitySelected: shell.isActivitySelected,
+                                  isActivitySelected: false,
                                   onActivityChosen: {
                                       shell.selectActivity()
                                   }
