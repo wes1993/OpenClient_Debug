@@ -229,8 +229,6 @@ jobs:
                                       }
                                   }
                               }
-                              .toolbarBackground(Color(uiColor: .systemBackground), for: .navigationBar)
-                              .toolbarBackground(.visible, for: .navigationBar)
                               .toolbar {
                                   ToolbarItem(placement: .topBarLeading) {
                                       Button {
@@ -305,6 +303,8 @@ jobs:
                               }
                           }
                       }
+                      .toolbarBackground(Color(uiColor: .systemBackground), for: .navigationBar)
+                      .toolbarBackground(.visible, for: .navigationBar)
                       .onChange(of: shell.selectedSessionID) { _, sessionID in
                           if sessionID != nil, shell.canPresentSelectedSessionDetail {
                               isIOS18CompatibilityDetailVisible = true
