@@ -268,14 +268,106 @@ jobs:
           text = text.replace(anchor, diagnostic)
 
           path.write_text(text)
+
+          # --- RootView diagnostic: bypass NavigationSplitView entirely on iOS 18 ---
+          root_path = Path("OpenCodeIOSClient/Views/Root/RootView.swift")
+          root = root_path.read_text()
+
+          old_app_shell = """    @ViewBuilder
+              private var appShell: some View {
+                  BrowserRootContainer(
+                      browser: shell.browser,
+                      usesInspectorPresentation: usesBrowserInspector
+                  ) {
+                      splitShell
+                  }
+              }
+          """
+
+          new_app_shell = """    @ViewBuilder
+              private var appShell: some View {
+                  if isIOS18RootNavigationDiagnostic {
+                      NavigationStack {
+                          if shell.isActivitySelected {
+                              ActivityView(
+                                  facade: shell.activity,
+                                  connection: shell.connection,
+                                  providerUsage: shell.providerUsage,
+                                  configurations: shell.configurations,
+                                  bridge: bridge
+                              ) {
+                                  // Detail navigation is intentionally omitted in this diagnostic branch.
+                              }
+                          } else if shell.hasCurrentProject {
+                              ProjectContentView(shell: shell, bridge: bridge) {
+                                  // Detail navigation is intentionally omitted in this diagnostic branch.
+                              }
+                          } else {
+                              ProjectListView(
+                                  facade: shell.projects,
+                                  connection: shell.connection,
+                                  configurations: shell.configurations,
+                                  games: shell.funAndGames,
+                                  bridge: bridge,
+                                  providerUsage: shell.providerUsage,
+                                  isActivitySelected: shell.isActivitySelected,
+                                  onActivityChosen: {
+                                      shell.selectActivity()
+                                  }
+                              ) {
+                                  guard shell.hasCurrentProject else { return }
+                                  shell.selectProjectContent()
+                              }
+                          }
+                      }
+                  } else {
+                      BrowserRootContainer(
+                          browser: shell.browser,
+                          usesInspectorPresentation: usesBrowserInspector
+                      ) {
+                          splitShell
+                      }
+                  }
+              }
+          """
+
+          if root.count(old_app_shell) != 1:
+              raise SystemExit(
+                  f"Expected exactly one RootView appShell block, found {root.count(old_app_shell)}; "
+                  "refusing to patch changed upstream source."
+              )
+          root = root.replace(old_app_shell, new_app_shell)
+
+          root_anchor = """    private var usesBrowserInspector: Bool {
+          """
+          root_helper = """    private var isIOS18RootNavigationDiagnostic: Bool {
+          #if os(iOS) && !targetEnvironment(macCatalyst)
+                  ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 18
+          #else
+                  false
+          #endif
+              }
+
+              private var usesBrowserInspector: Bool {
+          """
+
+          if root.count(root_anchor) != 1:
+              raise SystemExit(
+                  f"Expected exactly one usesBrowserInspector anchor, found {root.count(root_anchor)}; "
+                  "refusing to patch changed upstream source."
+              )
+          root = root.replace(root_anchor, root_helper)
+          root_path.write_text(root)
+
           print(
-              "Applied iOS 18 diagnostic Projects patch: iOS 18 uses a stripped-down ScrollView-based "
-              "Projects screen with a visible PATCH ACTIVE marker. iOS 26+ uses untouched upstream ProjectListView."
+              "Applied iOS 18 diagnostic patch: stripped-down Projects view plus complete bypass of "
+              "NavigationSplitView on iOS 18. iOS 26+ keeps the untouched upstream split-view shell."
           )
           PY
 
           git diff --check
           git diff -- OpenCodeIOSClient/Views/Projects/ProjectListView.swift
+          git diff -- OpenCodeIOSClient/Views/Root/RootView.swift
 
       - name: Build Debug app
         env:
