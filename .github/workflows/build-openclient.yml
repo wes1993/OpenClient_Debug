@@ -130,7 +130,7 @@ jobs:
           git diff --check
           git diff -- OpenCodeIOSClient/ProviderUsage/ProviderUsageCredentialRepository.swift
           
-      - name: Apply iOS 18 Projects header layout compatibility patch
+      - name: Apply iOS 18 Projects edit-mode compatibility patch
         if: ${{ !inputs.disable_ios18_patch }}
         run: |
           python3 - <<'PY'
@@ -139,53 +139,50 @@ jobs:
           path = Path("OpenCodeIOSClient/Views/Projects/ProjectListView.swift")
           text = path.read_text()
 
-          old_padding = """        .padding(.leading, -16)
-                  .padding(.trailing, -29)
+          old_env = """        .environment(\\.editMode, projectEditMode)
           """
-          new_padding = """        .modifier(ProjectListSectionHeaderPaddingCompatibility())
+          new_env = """        .modifier(ProjectListEditModeCompatibility(editMode: projectEditMode))
           """
 
-          if text.count(old_padding) != 1:
+          if text.count(old_env) != 1:
               raise SystemExit(
-                  f"Expected exactly one ProjectListSectionHeader negative-padding block, found {text.count(old_padding)}; "
+                  f"Expected exactly one ProjectList editMode environment modifier, found {text.count(old_env)}; "
                   "refusing to patch changed upstream source."
               )
-          text = text.replace(old_padding, new_padding)
+          text = text.replace(old_env, new_env)
 
-          anchor = """private enum ProjectListLayout {
+          anchor = """private struct ProjectSessionSearchSection: View {
           """
-          helper = """private struct ProjectListSectionHeaderPaddingCompatibility: ViewModifier {
+          helper = """private struct ProjectListEditModeCompatibility: ViewModifier {
+              let editMode: Binding<EditMode>
+
               @ViewBuilder
               func body(content: Content) -> some View {
           #if os(iOS) && !targetEnvironment(macCatalyst)
                   if ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 18 {
                       content
                   } else {
-                      content
-                          .padding(.leading, -16)
-                          .padding(.trailing, -29)
+                      content.environment(\\.editMode, editMode)
                   }
           #else
-                  content
-                      .padding(.leading, -16)
-                      .padding(.trailing, -29)
+                  content.environment(\\.editMode, editMode)
           #endif
               }
           }
 
-          private enum ProjectListLayout {
+          private struct ProjectSessionSearchSection: View {
           """
 
           if text.count(anchor) != 1:
               raise SystemExit(
-                  f"Expected exactly one ProjectListLayout anchor, found {text.count(anchor)}; "
+                  f"Expected exactly one ProjectSessionSearchSection anchor, found {text.count(anchor)}; "
                   "refusing to patch changed upstream source."
               )
           text = text.replace(anchor, helper)
 
           path.write_text(text)
           print(
-              "Applied iOS 18 Projects header-layout patch: negative section-header paddings are omitted "
+              "Applied iOS 18 Projects edit-mode patch: custom editMode environment binding is omitted "
               "on iOS 18 only; iOS 26+ keeps upstream behavior."
           )
           PY
