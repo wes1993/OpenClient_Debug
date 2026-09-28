@@ -177,12 +177,12 @@ jobs:
 
                   ScrollView {
                       VStack(alignment: .leading, spacing: 16) {
-                          Text("iOS 18 PATCH ACTIVE • GitHub Action r__GITHUB_ACTION_REV__")
+                          Text(verbatim: "iOS 18 PATCH ACTIVE • GitHub Action r__GITHUB_ACTION_REV__")
                               .font(.headline.weight(.bold))
                               .foregroundStyle(.red)
                               .frame(maxWidth: .infinity, alignment: .leading)
 
-                          Text("Diagnostic Projects View")
+                          Text(verbatim: "Diagnostic Projects View")
                               .font(.title2.weight(.semibold))
 
                           if facade.allowsActivity {
@@ -252,7 +252,7 @@ jobs:
                       .padding(.horizontal, 20)
                       .padding(.vertical, 16)
                   }
-                  .navigationTitle("Projects [iOS18 PATCH]")
+                  .navigationTitle(Text(verbatim: "Projects [iOS18 PATCH]"))
               }
 
               private var emptyProjectsMessage: LocalizedStringResource {
