@@ -130,7 +130,7 @@ jobs:
           git diff --check
           git diff -- OpenCodeIOSClient/ProviderUsage/ProviderUsageCredentialRepository.swift
           
-      - name: Apply iOS 18 Projects diagnostic compatibility patch
+      - name: Apply iOS 18 navigation compatibility patch
         if: ${{ !inputs.disable_ios18_patch }}
         run: |
           python3 - <<'PY'
@@ -138,149 +138,56 @@ jobs:
           import os
 
           run_number = os.environ.get("GITHUB_RUN_NUMBER", "unknown")
-          path = Path("OpenCodeIOSClient/Views/Projects/ProjectListView.swift")
-          text = path.read_text()
+
+          # Keep ProjectListView upstream-identical in structure/behavior.
+          # Add only a non-layout-affecting diagnostic overlay so we can confirm
+          # that the iOS 18 runtime branch and exact GitHub Actions revision are active.
+          project_path = Path("OpenCodeIOSClient/Views/Projects/ProjectListView.swift")
+          project = project_path.read_text()
 
           old_body = """    var body: some View {
                   projectListContent
               }
           """
           new_body = """    var body: some View {
-                  if isIOS18Runtime {
-                      projectListDiagnosticContent
-                  } else {
-                      projectListContent
-                  }
-              }
-          """
-
-          if text.count(old_body) != 1:
-              raise SystemExit(
-                  f"Expected exactly one ProjectListView body block, found {text.count(old_body)}; "
-                  "refusing to patch changed upstream source."
-              )
-          text = text.replace(old_body, new_body)
-
-          anchor = """    private var emptyProjectsMessage: LocalizedStringResource {
-          """
-          diagnostic = """    private var isIOS18Runtime: Bool {
-          #if os(iOS) && !targetEnvironment(macCatalyst)
-                  ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 18
-          #else
-                  false
-          #endif
-              }
-
-              @ViewBuilder
-              private var projectListDiagnosticContent: some View {
-                  let snapshot = facade.listSnapshot
-
-                  ScrollView {
-                      VStack(alignment: .leading, spacing: 16) {
-                          Text(verbatim: "iOS 18 PATCH ACTIVE • GitHub Action r__GITHUB_ACTION_REV__")
-                              .font(.headline.weight(.bold))
-                              .foregroundStyle(.red)
-                              .frame(maxWidth: .infinity, alignment: .leading)
-
-                          Text(verbatim: "Diagnostic Projects View")
-                              .font(.title2.weight(.semibold))
-
-                          if facade.allowsActivity {
-                              Button {
-                                  onActivityChosen()
-                              } label: {
-                                  HStack {
-                                      Image(systemName: "waveform.path.ecg")
-                                      Text("Activity")
-                                      Spacer()
-                                      Image(systemName: "chevron.right")
-                                  }
-                                  .padding(.vertical, 10)
-                              }
-                              .buttonStyle(.plain)
-                          }
-
-                          Divider()
-
-                          ForEach(snapshot.projects) { project in
-                              Button {
-                                  Task { @MainActor in
-                                      guard let ticket = await facade.prepareSelectionForNavigation(project) else { return }
-                                      onProjectChosen()
-                                      await facade.completeSelection(ticket)
-                                  }
-                              } label: {
-                                  HStack(spacing: 12) {
-                                      Image(systemName: project.id == "global" ? "globe" : "folder.fill")
-                                          .frame(width: 28)
-
-                                      VStack(alignment: .leading, spacing: 3) {
-                                          Text(projectTitle(project))
-                                              .font(.body.weight(.semibold))
-                                              .foregroundStyle(.primary)
-
-                                          Text(project.id == "global"
-                                               ? String(localized: "Shared sessions across the current server context")
-                                               : project.worktree)
-                                              .font(.caption)
-                                              .foregroundStyle(.secondary)
-                                              .lineLimit(1)
-                                      }
-
-                                      Spacer(minLength: 8)
-                                      Image(systemName: "chevron.right")
-                                          .font(.caption.weight(.bold))
-                                          .foregroundStyle(.tertiary)
-                                  }
-                                  .padding(.vertical, 10)
-                                  .contentShape(Rectangle())
-                              }
-                              .buttonStyle(.plain)
-
-                              Divider()
-                          }
-
-                          Button {
-                              connection.disconnect()
-                          } label: {
-                              Label("Disconnect", systemImage: "rectangle.portrait.and.arrow.right")
+                  projectListContent
+                      .overlay(alignment: .topLeading) {
+                          if ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 18 {
+                              Text(verbatim: "iOS 18 PATCH ACTIVE • GitHub Action r__GITHUB_ACTION_REV__")
+                                  .font(.caption2.weight(.bold))
                                   .foregroundStyle(.red)
-                                  .padding(.vertical, 10)
+                                  .padding(.horizontal, 8)
+                                  .padding(.vertical, 4)
+                                  .background(.ultraThinMaterial, in: Capsule())
+                                  .padding(.leading, 8)
+                                  .allowsHitTesting(false)
+                                  .zIndex(999)
                           }
-                          .buttonStyle(.plain)
                       }
-                      .padding(.horizontal, 20)
-                      .padding(.vertical, 16)
-                  }
-                  .navigationTitle(Text(verbatim: "Projects [iOS18 PATCH]"))
               }
-
-              private var emptyProjectsMessage: LocalizedStringResource {
           """
 
-          diagnostic = diagnostic.replace("__GITHUB_ACTION_REV__", run_number)
-
-          if text.count(anchor) != 1:
+          if project.count(old_body) != 1:
               raise SystemExit(
-                  f"Expected exactly one emptyProjectsMessage anchor, found {text.count(anchor)}; "
+                  f"Expected exactly one upstream ProjectListView body block, found {project.count(old_body)}; "
                   "refusing to patch changed upstream source."
               )
-          text = text.replace(anchor, diagnostic)
+          project = project.replace(old_body, new_body.replace("__GITHUB_ACTION_REV__", run_number))
+          project_path.write_text(project)
 
-          path.write_text(text)
-
-          # --- RootView diagnostic: bypass NavigationSplitView entirely on iOS 18 ---
+          # iOS 18 compatibility fix: bypass NavigationSplitView entirely.
+          # iOS 26+ continues through the untouched upstream splitShell.
           root_path = Path("OpenCodeIOSClient/Views/Root/RootView.swift")
           root = root_path.read_text()
 
           old_state = """    @State private var didRunUITestAutoConnect = false
           """
           new_state = """    @State private var didRunUITestAutoConnect = false
-              @State private var isIOS18DiagnosticProjectsRootVisible = false
+              @State private var isIOS18ProjectsRootVisible = false
           """
           if root.count(old_state) != 1:
               raise SystemExit(
-                  f"Expected exactly one RootView diagnostic state anchor, found {root.count(old_state)}; "
+                  f"Expected exactly one RootView state anchor, found {root.count(old_state)}; "
                   "refusing to patch changed upstream source."
               )
           root = root.replace(old_state, new_state)
@@ -298,9 +205,9 @@ jobs:
 
           new_app_shell = """    @ViewBuilder
               private var appShell: some View {
-                  if isIOS18RootNavigationDiagnostic {
+                  if isIOS18NavigationCompatibilityActive {
                       NavigationStack {
-                          if isIOS18DiagnosticProjectsRootVisible {
+                          if isIOS18ProjectsRootVisible {
                               ProjectListView(
                                   facade: shell.projects,
                                   connection: shell.connection,
@@ -310,12 +217,12 @@ jobs:
                                   providerUsage: shell.providerUsage,
                                   isActivitySelected: false,
                                   onActivityChosen: {
-                                      isIOS18DiagnosticProjectsRootVisible = false
+                                      isIOS18ProjectsRootVisible = false
                                       shell.selectActivity()
                                   }
                               ) {
                                   guard shell.hasCurrentProject else { return }
-                                  isIOS18DiagnosticProjectsRootVisible = false
+                                  isIOS18ProjectsRootVisible = false
                                   shell.selectProjectContent()
                               }
                           } else if shell.isActivitySelected {
@@ -326,12 +233,12 @@ jobs:
                                   configurations: shell.configurations,
                                   bridge: bridge
                               ) {
-                                  // Detail navigation is intentionally omitted in this diagnostic branch.
+                                  // Detail navigation remains upstream outside this iOS 18 compatibility shell.
                               }
                               .toolbar {
                                   ToolbarItem(placement: .topBarLeading) {
                                       Button {
-                                          isIOS18DiagnosticProjectsRootVisible = true
+                                          isIOS18ProjectsRootVisible = true
                                       } label: {
                                           Label("Projects", systemImage: "chevron.left")
                                       }
@@ -339,12 +246,12 @@ jobs:
                               }
                           } else if shell.hasCurrentProject {
                               ProjectContentView(shell: shell, bridge: bridge) {
-                                  // Detail navigation is intentionally omitted in this diagnostic branch.
+                                  // Detail navigation remains upstream outside this iOS 18 compatibility shell.
                               }
                               .toolbar {
                                   ToolbarItem(placement: .topBarLeading) {
                                       Button {
-                                          isIOS18DiagnosticProjectsRootVisible = true
+                                          isIOS18ProjectsRootVisible = true
                                       } label: {
                                           Label("Projects", systemImage: "chevron.left")
                                       }
@@ -381,14 +288,14 @@ jobs:
 
           if root.count(old_app_shell) != 1:
               raise SystemExit(
-                  f"Expected exactly one RootView appShell block, found {root.count(old_app_shell)}; "
+                  f"Expected exactly one upstream RootView appShell block, found {root.count(old_app_shell)}; "
                   "refusing to patch changed upstream source."
               )
           root = root.replace(old_app_shell, new_app_shell)
 
           root_anchor = """    private var usesBrowserInspector: Bool {
           """
-          root_helper = """    private var isIOS18RootNavigationDiagnostic: Bool {
+          root_helper = """    private var isIOS18NavigationCompatibilityActive: Bool {
           #if os(iOS) && !targetEnvironment(macCatalyst)
                   ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 18
           #else
@@ -398,7 +305,6 @@ jobs:
 
               private var usesBrowserInspector: Bool {
           """
-
           if root.count(root_anchor) != 1:
               raise SystemExit(
                   f"Expected exactly one usesBrowserInspector anchor, found {root.count(root_anchor)}; "
@@ -408,8 +314,8 @@ jobs:
           root_path.write_text(root)
 
           print(
-              "Applied iOS 18 diagnostic patch: stripped-down Projects view plus complete bypass of "
-              "NavigationSplitView on iOS 18. iOS 26+ keeps the untouched upstream split-view shell."
+              "Applied iOS 18 navigation compatibility patch: ProjectListView remains upstream except "
+              "for a diagnostic overlay; NavigationSplitView is bypassed on iOS 18 only."
           )
           PY
 
