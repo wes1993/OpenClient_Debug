@@ -140,7 +140,7 @@ jobs:
           text = path.read_text()
 
           old_padding = """        .padding(.leading, -16)
-              .padding(.trailing, -29)
+                  .padding(.trailing, -29)
           """
           new_padding = """        .modifier(ProjectListSectionHeaderPaddingCompatibility())
           """
