@@ -16,7 +16,7 @@ on:
         default: false
         type: boolean
       disable_ios18_patch:
-        description: "Disable iOS 18 Projects list patch (use upstream code as-is)"
+        description: "Disable iOS 18 navigation/layout patch (use upstream code as-is)"
         required: false
         default: false
         type: boolean
@@ -130,60 +130,63 @@ jobs:
           git diff --check
           git diff -- OpenCodeIOSClient/ProviderUsage/ProviderUsageCredentialRepository.swift
           
-      - name: Apply iOS 18 Projects list runtime compatibility patch
+      - name: Apply iOS 18 navigation/layout runtime compatibility patch
         if: ${{ !inputs.disable_ios18_patch }}
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
-          path = Path("OpenCodeIOSClient/Views/Projects/ProjectListView.swift")
+          path = Path("OpenCodeIOSClient/Views/Root/RootView.swift")
           text = path.read_text()
 
-          old_style = """        .listStyle(.sidebar)
-          """
-          new_style = """        .modifier(ProjectListRuntimeListStyleModifier())
-          """
-
-          if text.count(old_style) != 1:
+          needle = "withAnimation(opencodeSelectionAnimation)"
+          count = text.count(needle)
+          if count < 4:
               raise SystemExit(
-                  f"Expected exactly one ProjectList .listStyle(.sidebar), found {text.count(old_style)}; "
+                  f"Expected multiple RootView navigation animations, found {count}; "
                   "refusing to patch changed upstream source."
               )
 
-          anchor = """private struct ProjectSessionSearchSection: View {
+          replacement = "withAnimation(isIOS18Runtime ? nil : opencodeSelectionAnimation)"
+          text = text.replace(needle, replacement)
+
+          old_animation = ".animation(opencodeSelectionAnimation, value: shell.hasActiveWorkspace)"
+          new_animation = ".animation(isIOS18Runtime ? nil : opencodeSelectionAnimation, value: shell.hasActiveWorkspace)"
+          if text.count(old_animation) != 1:
+              raise SystemExit(
+                  f"Expected exactly one workspace animation modifier, found {text.count(old_animation)}; "
+                  "refusing to patch changed upstream source."
+              )
+          text = text.replace(old_animation, new_animation)
+
+          anchor = """    private var usesBrowserInspector: Bool {
           """
-          helper = """private struct ProjectListRuntimeListStyleModifier: ViewModifier {
-              @ViewBuilder
-              func body(content: Content) -> some View {
+          helper = """    private var isIOS18Runtime: Bool {
           #if os(iOS) && !targetEnvironment(macCatalyst)
-                  if ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 18 {
-                      content.listStyle(.insetGrouped)
-                  } else {
-                      content.listStyle(.sidebar)
-                  }
+              ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 18
           #else
-                  content.listStyle(.sidebar)
+              false
           #endif
-              }
           }
 
-          private struct ProjectSessionSearchSection: View {
+              private var usesBrowserInspector: Bool {
           """
-
           if text.count(anchor) != 1:
               raise SystemExit(
-                  f"Expected exactly one ProjectSessionSearchSection anchor, found {text.count(anchor)}; "
+                  f"Expected exactly one usesBrowserInspector anchor, found {text.count(anchor)}; "
                   "refusing to patch changed upstream source."
               )
-
-          text = text.replace(old_style, new_style)
           text = text.replace(anchor, helper)
+
           path.write_text(text)
-          print("Applied runtime Projects List style patch: iOS 18=insetGrouped, other OS versions=sidebar.")
+          print(
+              f"Applied iOS 18 runtime navigation patch: disabled {count} split-view route animations "
+              "on iOS 18 only; iOS 26+ keeps upstream animations."
+          )
           PY
 
           git diff --check
-          git diff -- OpenCodeIOSClient/Views/Projects/ProjectListView.swift
+          git diff -- OpenCodeIOSClient/Views/Root/RootView.swift
 
       - name: Build Debug app
         env:
