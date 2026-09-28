@@ -130,7 +130,7 @@ jobs:
           git diff --check
           git diff -- OpenCodeIOSClient/ProviderUsage/ProviderUsageCredentialRepository.swift
           
-      - name: Apply iOS 18 Projects edit-mode compatibility patch
+      - name: Apply iOS 18 Projects recent-sessions task compatibility patch
         if: ${{ !inputs.disable_ios18_patch }}
         run: |
           python3 - <<'PY'
@@ -139,22 +139,31 @@ jobs:
           path = Path("OpenCodeIOSClient/Views/Projects/ProjectListView.swift")
           text = path.read_text()
 
-          old_env = """        .environment(\\.editMode, projectEditMode)
+          old_task = """        .task(id: snapshot.recentLoadKey) {
+                      guard !isScreenshotScene else { return }
+                      await facade.loadRecentSessions()
+                  }
           """
-          new_env = """        .modifier(ProjectListEditModeCompatibility(editMode: projectEditMode))
+          new_task = """        .modifier(ProjectListRecentSessionsTaskCompatibility(
+                      facade: facade,
+                      recentLoadKey: snapshot.recentLoadKey,
+                      isScreenshotScene: isScreenshotScene
+                  ))
           """
 
-          if text.count(old_env) != 1:
+          if text.count(old_task) != 1:
               raise SystemExit(
-                  f"Expected exactly one ProjectList editMode environment modifier, found {text.count(old_env)}; "
+                  f"Expected exactly one recent-sessions task block, found {text.count(old_task)}; "
                   "refusing to patch changed upstream source."
               )
-          text = text.replace(old_env, new_env)
+          text = text.replace(old_task, new_task)
 
           anchor = """private struct ProjectSessionSearchSection: View {
           """
-          helper = """private struct ProjectListEditModeCompatibility: ViewModifier {
-              let editMode: Binding<EditMode>
+          helper = """private struct ProjectListRecentSessionsTaskCompatibility: ViewModifier {
+              let facade: ProjectFacade
+              let recentLoadKey: String
+              let isScreenshotScene: Bool
 
               @ViewBuilder
               func body(content: Content) -> some View {
@@ -162,10 +171,16 @@ jobs:
                   if ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 18 {
                       content
                   } else {
-                      content.environment(\\.editMode, editMode)
+                      content.task(id: recentLoadKey) {
+                          guard !isScreenshotScene else { return }
+                          await facade.loadRecentSessions()
+                      }
                   }
           #else
-                  content.environment(\\.editMode, editMode)
+                  content.task(id: recentLoadKey) {
+                      guard !isScreenshotScene else { return }
+                      await facade.loadRecentSessions()
+                  }
           #endif
               }
           }
@@ -182,8 +197,8 @@ jobs:
 
           path.write_text(text)
           print(
-              "Applied iOS 18 Projects edit-mode patch: custom editMode environment binding is omitted "
-              "on iOS 18 only; iOS 26+ keeps upstream behavior."
+              "Applied iOS 18 Projects recent-sessions task patch: automatic loadRecentSessions task is "
+              "disabled on iOS 18 only; iOS 26+ keeps upstream behavior."
           )
           PY
 
