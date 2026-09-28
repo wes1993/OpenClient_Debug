@@ -140,6 +140,20 @@ jobs:
           root_path = Path("OpenCodeIOSClient/Views/Root/RootView.swift")
           root = root_path.read_text()
 
+          old_import = """import SwiftUI
+          """
+          new_import = """import SwiftUI
+          #if os(iOS)
+          import UIKit
+          #endif
+          """
+          if root.count(old_import) != 1:
+              raise SystemExit(
+                  f"Expected exactly one RootView SwiftUI import, found {root.count(old_import)}; "
+                  "refusing to patch changed upstream source."
+              )
+          root = root.replace(old_import, new_import)
+
           old_state = """    @State private var didRunUITestAutoConnect = false
           """
           new_state = """    @State private var didRunUITestAutoConnect = false
@@ -305,6 +319,9 @@ jobs:
                       }
                       .toolbarBackground(Color(uiColor: .systemBackground), for: .navigationBar)
                       .toolbarBackground(.visible, for: .navigationBar)
+                      .onAppear {
+                          configureIOS18OpaqueNavigationBar()
+                      }
                       .onChange(of: shell.selectedSessionID) { _, sessionID in
                           if sessionID != nil, shell.canPresentSelectedSessionDetail {
                               isIOS18CompatibilityDetailVisible = true
@@ -332,7 +349,24 @@ jobs:
 
           root_anchor = """    private var usesBrowserInspector: Bool {
           """
-          root_helper = """    private var isIOS18NavigationCompatibilityActive: Bool {
+          root_helper = """    private func configureIOS18OpaqueNavigationBar() {
+          #if os(iOS) && !targetEnvironment(macCatalyst)
+                  guard ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 18 else { return }
+
+                  let appearance = UINavigationBarAppearance()
+                  appearance.configureWithOpaqueBackground()
+                  appearance.backgroundColor = .systemBackground
+                  appearance.shadowColor = .separator
+
+                  let navigationBar = UINavigationBar.appearance()
+                  navigationBar.standardAppearance = appearance
+                  navigationBar.scrollEdgeAppearance = appearance
+                  navigationBar.compactAppearance = appearance
+                  navigationBar.compactScrollEdgeAppearance = appearance
+          #endif
+              }
+
+              private var isIOS18NavigationCompatibilityActive: Bool {
           #if os(iOS) && !targetEnvironment(macCatalyst)
                   ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 18
           #else
