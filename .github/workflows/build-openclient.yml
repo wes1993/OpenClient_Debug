@@ -369,6 +369,84 @@ jobs:
           root = root.replace(root_anchor, root_helper)
           root_path.write_text(root)
 
+          # iOS 18 chat performance diagnostic:
+          # keep the native UICollectionView bounce, but disable the custom bottom
+          # overscroll pull-to-refresh state machine that runs on every bounce frame.
+          chat_path = Path("OpenCodeIOSClient/Views/Chat/ChatView.swift")
+          chat = chat_path.read_text()
+
+          old_scroll = """        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+                      updateBottomState(for: scrollView)
+                      updateBottomPullState(for: scrollView)
+                  }
+          """
+          new_scroll = """        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+                      updateBottomState(for: scrollView)
+                      if ProcessInfo.processInfo.operatingSystemVersion.majorVersion != 18 {
+                          updateBottomPullState(for: scrollView)
+                      }
+                  }
+          """
+
+          if chat.count(old_scroll) != 1:
+              raise SystemExit(
+                  f"Expected exactly one ChatView scrollViewDidScroll block, found {chat.count(old_scroll)}; "
+                  "refusing to patch changed upstream source."
+              )
+          chat = chat.replace(old_scroll, new_scroll)
+
+          old_end_decelerating = """        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+                      updateBottomState(for: scrollView)
+                      finishBottomPull(for: scrollView)
+                      applyPendingBottomScrollIfNeeded(in: scrollView)
+                      applyPendingRowsIfNeeded(in: scrollView)
+                  }
+          """
+          new_end_decelerating = """        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+                      updateBottomState(for: scrollView)
+                      if ProcessInfo.processInfo.operatingSystemVersion.majorVersion != 18 {
+                          finishBottomPull(for: scrollView)
+                      }
+                      applyPendingBottomScrollIfNeeded(in: scrollView)
+                      applyPendingRowsIfNeeded(in: scrollView)
+                  }
+          """
+
+          if chat.count(old_end_decelerating) != 1:
+              raise SystemExit(
+                  f"Expected exactly one ChatView scrollViewDidEndDecelerating block, found {chat.count(old_end_decelerating)}; "
+                  "refusing to patch changed upstream source."
+              )
+          chat = chat.replace(old_end_decelerating, new_end_decelerating)
+
+          old_end_dragging = """        func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+                      finishBottomPull(for: scrollView)
+                      guard !decelerate else { return }
+                      updateBottomState(for: scrollView)
+                      applyPendingBottomScrollIfNeeded(in: scrollView)
+                      applyPendingRowsIfNeeded(in: scrollView)
+                  }
+          """
+          new_end_dragging = """        func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+                      if ProcessInfo.processInfo.operatingSystemVersion.majorVersion != 18 {
+                          finishBottomPull(for: scrollView)
+                      }
+                      guard !decelerate else { return }
+                      updateBottomState(for: scrollView)
+                      applyPendingBottomScrollIfNeeded(in: scrollView)
+                      applyPendingRowsIfNeeded(in: scrollView)
+                  }
+          """
+
+          if chat.count(old_end_dragging) != 1:
+              raise SystemExit(
+                  f"Expected exactly one ChatView scrollViewDidEndDragging block, found {chat.count(old_end_dragging)}; "
+                  "refusing to patch changed upstream source."
+              )
+          chat = chat.replace(old_end_dragging, new_end_dragging)
+
+          chat_path.write_text(chat)
+
           print(
               "Applied iOS 18 navigation compatibility patch: NavigationSplitView is bypassed "
               "on iOS 18 only; ProjectListView remains upstream."
@@ -377,6 +455,7 @@ jobs:
 
           git diff --check
           git diff -- OpenCodeIOSClient/Views/Root/RootView.swift
+          git diff -- OpenCodeIOSClient/Views/Chat/ChatView.swift
 
       - name: Build Debug app
         env:
