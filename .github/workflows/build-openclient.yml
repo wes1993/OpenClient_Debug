@@ -370,9 +370,9 @@ jobs:
           root_path.write_text(root)
 
           # iOS 18 chat performance compatibility:
-          # keep native UICollectionView bounce, but disable both the delayed
-          # bottom-chase corrections and the custom bottom pull-to-refresh state
-          # machine. iOS 26+ remains upstream.
+          # keep native UICollectionView bounce and upstream bottom pull-to-refresh,
+          # but disable the delayed bottom-chase corrections that repeatedly force
+          # layout/offset updates. iOS 26+ remains upstream.
           chat_path = Path("OpenCodeIOSClient/Views/Chat/ChatView.swift")
           chat = chat_path.read_text()
 
@@ -430,84 +430,6 @@ jobs:
                   f"found {chat.count(old_bottom_chase)}; refusing to patch changed upstream source."
               )
           chat = chat.replace(old_bottom_chase, new_bottom_chase)
-
-          old_scroll = """        func scrollViewDidScroll(_ scrollView: UIScrollView) {
-                      updateBottomState(for: scrollView)
-                      updateBottomPullState(for: scrollView)
-                  }
-          """
-          new_scroll = """        func scrollViewDidScroll(_ scrollView: UIScrollView) {
-                      updateBottomState(for: scrollView)
-                      #if os(iOS) && !targetEnvironment(macCatalyst)
-                      if ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 18 {
-                          return
-                      }
-                      #endif
-                      updateBottomPullState(for: scrollView)
-                  }
-          """
-          if chat.count(old_scroll) != 1:
-              raise SystemExit(
-                  f"Expected exactly one ChatView scrollViewDidScroll block, found {chat.count(old_scroll)}; "
-                  "refusing to patch changed upstream source."
-              )
-          chat = chat.replace(old_scroll, new_scroll)
-
-          old_end_decelerating = """        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
-                      updateBottomState(for: scrollView)
-                      finishBottomPull(for: scrollView)
-                      applyPendingBottomScrollIfNeeded(in: scrollView)
-                      applyPendingRowsIfNeeded(in: scrollView)
-                  }
-          """
-          new_end_decelerating = """        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
-                      updateBottomState(for: scrollView)
-                      #if os(iOS) && !targetEnvironment(macCatalyst)
-                      if ProcessInfo.processInfo.operatingSystemVersion.majorVersion != 18 {
-                          finishBottomPull(for: scrollView)
-                      }
-                      #else
-                      finishBottomPull(for: scrollView)
-                      #endif
-                      applyPendingBottomScrollIfNeeded(in: scrollView)
-                      applyPendingRowsIfNeeded(in: scrollView)
-                  }
-          """
-          if chat.count(old_end_decelerating) != 1:
-              raise SystemExit(
-                  f"Expected exactly one ChatView scrollViewDidEndDecelerating block, found {chat.count(old_end_decelerating)}; "
-                  "refusing to patch changed upstream source."
-              )
-          chat = chat.replace(old_end_decelerating, new_end_decelerating)
-
-          old_end_dragging = """        func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
-                      finishBottomPull(for: scrollView)
-                      guard !decelerate else { return }
-                      updateBottomState(for: scrollView)
-                      applyPendingBottomScrollIfNeeded(in: scrollView)
-                      applyPendingRowsIfNeeded(in: scrollView)
-                  }
-          """
-          new_end_dragging = """        func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
-                      #if os(iOS) && !targetEnvironment(macCatalyst)
-                      if ProcessInfo.processInfo.operatingSystemVersion.majorVersion != 18 {
-                          finishBottomPull(for: scrollView)
-                      }
-                      #else
-                      finishBottomPull(for: scrollView)
-                      #endif
-                      guard !decelerate else { return }
-                      updateBottomState(for: scrollView)
-                      applyPendingBottomScrollIfNeeded(in: scrollView)
-                      applyPendingRowsIfNeeded(in: scrollView)
-                  }
-          """
-          if chat.count(old_end_dragging) != 1:
-              raise SystemExit(
-                  f"Expected exactly one ChatView scrollViewDidEndDragging block, found {chat.count(old_end_dragging)}; "
-                  "refusing to patch changed upstream source."
-              )
-          chat = chat.replace(old_end_dragging, new_end_dragging)
 
           chat_path.write_text(chat)
 
