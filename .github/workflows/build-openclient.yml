@@ -370,81 +370,66 @@ jobs:
           root_path.write_text(root)
 
           # iOS 18 chat performance diagnostic:
-          # keep the native UICollectionView bounce, but disable the custom bottom
-          # overscroll pull-to-refresh state machine that runs on every bounce frame.
+          # restore upstream bottom pull-to-refresh behavior and disable only the
+          # delayed bottom-chase corrections that repeatedly force layout/offset updates.
           chat_path = Path("OpenCodeIOSClient/Views/Chat/ChatView.swift")
           chat = chat_path.read_text()
 
-          old_scroll = """        func scrollViewDidScroll(_ scrollView: UIScrollView) {
-                      updateBottomState(for: scrollView)
-                      updateBottomPullState(for: scrollView)
-                  }
-          """
-          new_scroll = """        func scrollViewDidScroll(_ scrollView: UIScrollView) {
-                      updateBottomState(for: scrollView)
-                      if ProcessInfo.processInfo.operatingSystemVersion.majorVersion != 18 {
-                          updateBottomPullState(for: scrollView)
+          old_bottom_chase = """    @MainActor
+              private func scheduleBottomChase(animated: Bool) {
+                  bottomChaseTask = Task { @MainActor [weak self] in
+                      defer { self?.bottomChaseTask = nil }
+                      for delay in [90, 180, 320, 520, 800, 1_200] {
+                          try? await Task.sleep(for: .milliseconds(delay))
+                          guard !Task.isCancelled, let collectionView = self?.collectionView else { return }
+                          collectionView.layoutIfNeeded()
+                          guard Self.distanceFromBottom(in: collectionView) > 3 else { return }
+                          Self.scrollToBottom(
+                              in: collectionView,
+                              animated: animated,
+                              interruptsCurrentScroll: false,
+                              performsLayout: false
+                          )
                       }
                   }
+              }
           """
 
-          if chat.count(old_scroll) != 1:
-              raise SystemExit(
-                  f"Expected exactly one ChatView scrollViewDidScroll block, found {chat.count(old_scroll)}; "
-                  "refusing to patch changed upstream source."
-              )
-          chat = chat.replace(old_scroll, new_scroll)
-
-          old_end_decelerating = """        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
-                      updateBottomState(for: scrollView)
-                      finishBottomPull(for: scrollView)
-                      applyPendingBottomScrollIfNeeded(in: scrollView)
-                      applyPendingRowsIfNeeded(in: scrollView)
+          new_bottom_chase = """    @MainActor
+              private func scheduleBottomChase(animated: Bool) {
+                  #if os(iOS) && !targetEnvironment(macCatalyst)
+                  if ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 18 {
+                      bottomChaseTask?.cancel()
+                      bottomChaseTask = nil
+                      return
                   }
-          """
-          new_end_decelerating = """        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
-                      updateBottomState(for: scrollView)
-                      if ProcessInfo.processInfo.operatingSystemVersion.majorVersion != 18 {
-                          finishBottomPull(for: scrollView)
+                  #endif
+
+                  bottomChaseTask = Task { @MainActor [weak self] in
+                      defer { self?.bottomChaseTask = nil }
+                      for delay in [90, 180, 320, 520, 800, 1_200] {
+                          try? await Task.sleep(for: .milliseconds(delay))
+                          guard !Task.isCancelled, let collectionView = self?.collectionView else { return }
+                          collectionView.layoutIfNeeded()
+                          guard Self.distanceFromBottom(in: collectionView) > 3 else { return }
+                          Self.scrollToBottom(
+                              in: collectionView,
+                              animated: animated,
+                              interruptsCurrentScroll: false,
+                              performsLayout: false
+                          )
                       }
-                      applyPendingBottomScrollIfNeeded(in: scrollView)
-                      applyPendingRowsIfNeeded(in: scrollView)
                   }
+              }
           """
 
-          if chat.count(old_end_decelerating) != 1:
+          if chat.count(old_bottom_chase) != 1:
               raise SystemExit(
-                  f"Expected exactly one ChatView scrollViewDidEndDecelerating block, found {chat.count(old_end_decelerating)}; "
-                  "refusing to patch changed upstream source."
+                  f"Expected exactly one ChatTranscriptScrollController bottom-chase block, "
+                  f"found {chat.count(old_bottom_chase)}; refusing to patch changed upstream source."
               )
-          chat = chat.replace(old_end_decelerating, new_end_decelerating)
 
-          old_end_dragging = """        func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
-                      finishBottomPull(for: scrollView)
-                      guard !decelerate else { return }
-                      updateBottomState(for: scrollView)
-                      applyPendingBottomScrollIfNeeded(in: scrollView)
-                      applyPendingRowsIfNeeded(in: scrollView)
-                  }
-          """
-          new_end_dragging = """        func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
-                      if ProcessInfo.processInfo.operatingSystemVersion.majorVersion != 18 {
-                          finishBottomPull(for: scrollView)
-                      }
-                      guard !decelerate else { return }
-                      updateBottomState(for: scrollView)
-                      applyPendingBottomScrollIfNeeded(in: scrollView)
-                      applyPendingRowsIfNeeded(in: scrollView)
-                  }
-          """
-
-          if chat.count(old_end_dragging) != 1:
-              raise SystemExit(
-                  f"Expected exactly one ChatView scrollViewDidEndDragging block, found {chat.count(old_end_dragging)}; "
-                  "refusing to patch changed upstream source."
-              )
-          chat = chat.replace(old_end_dragging, new_end_dragging)
-
+          chat = chat.replace(old_bottom_chase, new_bottom_chase)
           chat_path.write_text(chat)
 
           print(
