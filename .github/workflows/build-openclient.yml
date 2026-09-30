@@ -476,76 +476,141 @@ jobs:
             exit 0
           fi
 
-          # Only use the workaround for the known Swift type-checker failure.
-          if ! grep -q "compiler is unable to type-check this expression in reasonable time" "$RUNNER_TEMP/openclient-build.log" || \
-             ! grep -q "NewProjectChatFacade.swift" "$RUNNER_TEMP/openclient-build.log"; then
+          # Only use temporary workarounds for known Swift compiler type-checker failures.
+          if ! grep -q "compiler is unable to type-check this expression in reasonable time" "$RUNNER_TEMP/openclient-build.log"; then
             echo "::error::Normal build failed for an unrelated reason; temporary workaround not applied."
             exit 1
           fi
 
-          if [ "$DISABLE_SWIFT_WORKAROUND" = "true" ]; then
-            echo "::error::Known NewProjectChatFacade Swift type-checker failure detected, but the Swift workaround was disabled by workflow input."
+          HAS_NEW_PROJECT_FAILURE=false
+          HAS_SIDE_QUESTION_FAILURE=false
+
+          if grep -E -q "NewProjectChatFacade\.swift:[0-9]+:[0-9]+: error: the compiler is unable to type-check this expression in reasonable time" "$RUNNER_TEMP/openclient-build.log"; then
+            HAS_NEW_PROJECT_FAILURE=true
+          fi
+
+          if grep -E -q "SideQuestionSheet\.swift:[0-9]+:[0-9]+: error: the compiler is unable to type-check this expression in reasonable time" "$RUNNER_TEMP/openclient-build.log"; then
+            HAS_SIDE_QUESTION_FAILURE=true
+          fi
+
+          if [ "$HAS_NEW_PROJECT_FAILURE" != "true" ] && [ "$HAS_SIDE_QUESTION_FAILURE" != "true" ]; then
+            echo "::error::Swift type-checker failure detected, but it is not one of the known workaround targets."
+            grep -E "error: the compiler is unable to type-check this expression in reasonable time" "$RUNNER_TEMP/openclient-build.log" || true
             exit 1
           fi
 
-          echo "::warning::Known NewProjectChatFacade Swift type-checker failure detected. Applying temporary local workaround and retrying."
+          if [ "$DISABLE_SWIFT_WORKAROUND" = "true" ]; then
+            echo "::error::Known Swift type-checker failure detected, but the Swift workaround was disabled by workflow input."
+            exit 1
+          fi
 
-          python3 - <<'PY'
+          echo "::warning::Known Swift type-checker failure detected. Applying targeted temporary workaround(s) and retrying."
+
+          HAS_NEW_PROJECT_FAILURE="$HAS_NEW_PROJECT_FAILURE" HAS_SIDE_QUESTION_FAILURE="$HAS_SIDE_QUESTION_FAILURE" python3 - <<'PY'
           from pathlib import Path
+          import os
 
-          path = Path("OpenCodeIOSClient/Facades/NewProjectChatFacade.swift")
-          text = path.read_text()
-          lines = text.splitlines(keepends=True)
+          if os.environ["HAS_NEW_PROJECT_FAILURE"] == "true":
+              path = Path("OpenCodeIOSClient/Facades/NewProjectChatFacade.swift")
+              text = path.read_text()
+              lines = text.splitlines(keepends=True)
 
-          starts = [i for i, line in enumerate(lines) if line.strip() == "Publishers.MergeMany(["]
-          if len(starts) != 1:
-              raise SystemExit(f"Expected exactly one MergeMany observation block, found {len(starts)}; refusing to apply workaround.")
+              starts = [i for i, line in enumerate(lines) if line.strip() == "Publishers.MergeMany(["]
+              if len(starts) != 1:
+                  raise SystemExit(
+                      f"Expected exactly one MergeMany observation block, found {len(starts)}; "
+                      "refusing to apply NewProjectChatFacade workaround."
+                  )
 
-          start = starts[0]
-          indent = lines[start][:len(lines[start]) - len(lines[start].lstrip())]
-          end = None
-          for i in range(start + 1, len(lines) - 2):
-              if (
-                  lines[i].strip() == "])"
-                  and lines[i + 1].strip() == ".sink { [weak self] _ in self?.objectWillChange.send() }"
-                  and lines[i + 2].strip() == ".store(in: &observations)"
+              start = starts[0]
+              indent = lines[start][:len(lines[start]) - len(lines[start].lstrip())]
+              end = None
+              for i in range(start + 1, len(lines) - 2):
+                  if (
+                      lines[i].strip() == "])"
+                      and lines[i + 1].strip() == ".sink { [weak self] _ in self?.objectWillChange.send() }"
+                      and lines[i + 2].strip() == ".store(in: &observations)"
+                  ):
+                      end = i + 2
+                      break
+
+              if end is None:
+                  raise SystemExit(
+                      "Known MergeMany closing block changed upstream; "
+                      "refusing to apply NewProjectChatFacade workaround."
+                  )
+
+              entries = [line.strip() for line in lines[start + 1:end - 2] if line.strip()]
+              if len(entries) < 2 or not all(
+                  entry.startswith("viewModel.") and entry.endswith(",") for entry in entries
               ):
-                  end = i + 2
-                  break
+                  raise SystemExit(
+                      "Unexpected MergeMany contents; refusing to apply NewProjectChatFacade workaround."
+                  )
 
-          if end is None:
-              raise SystemExit("Known MergeMany closing block changed upstream; refusing to apply workaround.")
-
-          entries = [line.strip() for line in lines[start + 1:end - 2] if line.strip()]
-          if len(entries) < 2 or not all(entry.startswith("viewModel.") and entry.endswith(",") for entry in entries):
-              raise SystemExit("Unexpected MergeMany contents; refusing to apply workaround.")
-
-          declarations = [
-              f"{indent}let changePublisher{index}: AnyPublisher<Void, Never> = {entry[:-1]}\n"
-              for index, entry in enumerate(entries)
-          ]
-          names = [f"changePublisher{index}" for index in range(len(entries))]
-          replacement = (
-              declarations
-              + [f"\n{indent}Publishers.MergeMany([\n"]
-              + [f"{indent}    {name},\n" for name in names]
-              + [
-                  f"{indent}])\n",
-                  f"{indent}.sink {{ [weak self] _ in self?.objectWillChange.send() }}\n",
-                  f"{indent}.store(in: &observations)\n",
+              declarations = [
+                  f"{indent}let changePublisher{index}: AnyPublisher<Void, Never> = {entry[:-1]}\n"
+                  for index, entry in enumerate(entries)
               ]
-          )
+              names = [f"changePublisher{index}" for index in range(len(entries))]
+              replacement = (
+                  declarations
+                  + [f"\n{indent}Publishers.MergeMany([\n"]
+                  + [f"{indent}    {name},\n" for name in names]
+                  + [
+                      f"{indent}])\n",
+                      f"{indent}.sink {{ [weak self] _ in self?.objectWillChange.send() }}\n",
+                      f"{indent}.store(in: &observations)\n",
+                  ]
+              )
 
-          patched = "".join(lines[:start] + replacement + lines[end + 1:])
-          if patched == text:
-              raise SystemExit("Workaround produced no source change; refusing to retry.")
-          path.write_text(patched)
-          print(f"Temporary workaround applied to {len(entries)} publishers.")
+              patched = "".join(lines[:start] + replacement + lines[end + 1:])
+              if patched == text:
+                  raise SystemExit("NewProjectChatFacade workaround produced no source change.")
+              path.write_text(patched)
+              print(f"Temporary NewProjectChatFacade workaround applied to {len(entries)} publishers.")
+
+          if os.environ["HAS_SIDE_QUESTION_FAILURE"] == "true":
+              path = Path("OpenCodeIOSClient/Views/Chat/SideQuestionSheet.swift")
+              text = path.read_text()
+
+              old = """        let points = (0..<count).map { index -> CGPoint in
+                      let angle = Double(index) * 2 * .pi / Double(count)
+                      let wave = 1 + (1 - roundness) * (0.12 * sin(3 * angle + phase) + 0.07 * sin(2 * angle - phase * 1.25))
+                      return CGPoint(x: rect.midX + horizontalRadius * wave * cos(angle),
+                                     y: rect.midY + verticalRadius * wave * sin(angle))
+                  }
+              """
+
+              new = """        let points: [CGPoint] = (0..<count).map { index in
+                      let angle = Double(index) * 2.0 * Double.pi / Double(count)
+                      let waveA = 0.12 * sin(3.0 * angle + phase)
+                      let waveB = 0.07 * sin(2.0 * angle - phase * 1.25)
+                      let roundnessFactor = 1.0 - Double(roundness)
+                      let wave = 1.0 + roundnessFactor * (waveA + waveB)
+                      let x = rect.midX + horizontalRadius * CGFloat(wave * cos(angle))
+                      let y = rect.midY + verticalRadius * CGFloat(wave * sin(angle))
+                      return CGPoint(x: x, y: y)
+                  }
+              """
+
+              if text.count(old) != 1:
+                  raise SystemExit(
+                      f"Expected exactly one SideQuestionBlobShape points expression, found {text.count(old)}; "
+                      "refusing to apply SideQuestionSheet workaround."
+                  )
+
+              path.write_text(text.replace(old, new))
+              print("Temporary SideQuestionSheet type-checker workaround applied.")
           PY
 
-          # Ensure the workaround actually changed only the expected upstream file.
           git diff --check
-          git diff -- OpenCodeIOSClient/Facades/NewProjectChatFacade.swift
+          if [ "$HAS_NEW_PROJECT_FAILURE" = "true" ]; then
+            git diff -- OpenCodeIOSClient/Facades/NewProjectChatFacade.swift
+          fi
+          if [ "$HAS_SIDE_QUESTION_FAILURE" = "true" ]; then
+            git diff -- OpenCodeIOSClient/Views/Chat/SideQuestionSheet.swift
+          fi
 
           rm -rf "$RUNNER_TEMP/DerivedData"
           build_app
