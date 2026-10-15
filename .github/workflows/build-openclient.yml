@@ -637,25 +637,29 @@ jobs:
               path = Path("OpenCodeIOSClient/Views/Chat/SideQuestionSheet.swift")
               text = path.read_text()
 
-              old = """        let points = (0..<count).map { index -> CGPoint in
-                      let angle = Double(index) * 2 * .pi / Double(count)
-                      let wave = 1 + (1 - roundness) * (0.12 * sin(3 * angle + phase) + 0.07 * sin(2 * angle - phase * 1.25))
-                      return CGPoint(x: rect.midX + horizontalRadius * wave * cos(angle),
-                                     y: rect.midY + verticalRadius * wave * sin(angle))
-                  }
-              """
+              old_lines = [
+                  "        let points = (0..<count).map { index -> CGPoint in",
+                  "            let angle = Double(index) * 2 * .pi / Double(count)",
+                  "            let wave = 1 + (1 - roundness) * (0.12 * sin(3 * angle + phase) + 0.07 * sin(2 * angle - phase * 1.25))",
+                  "            return CGPoint(x: rect.midX + horizontalRadius * wave * cos(angle),",
+                  "                           y: rect.midY + verticalRadius * wave * sin(angle))",
+                  "        }",
+              ]
+              old = "\\n".join(old_lines) + "\\n"
 
-              new = """        let points: [CGPoint] = (0..<count).map { index in
-                      let angle = Double(index) * 2.0 * Double.pi / Double(count)
-                      let waveA = 0.12 * sin(3.0 * angle + phase)
-                      let waveB = 0.07 * sin(2.0 * angle - phase * 1.25)
-                      let roundnessFactor = 1.0 - Double(roundness)
-                      let wave = 1.0 + roundnessFactor * (waveA + waveB)
-                      let x = rect.midX + horizontalRadius * CGFloat(wave * cos(angle))
-                      let y = rect.midY + verticalRadius * CGFloat(wave * sin(angle))
-                      return CGPoint(x: x, y: y)
-                  }
-              """
+              new_lines = [
+                  "        let points: [CGPoint] = (0..<count).map { index in",
+                  "            let angle: Double = Double(index) * 2.0 * Double.pi / Double(count)",
+                  "            let waveA: Double = 0.12 * sin(3.0 * angle + phase)",
+                  "            let waveB: Double = 0.07 * sin(2.0 * angle - phase * 1.25)",
+                  "            let roundnessFactor: Double = 1.0 - Double(roundness)",
+                  "            let wave: Double = 1.0 + roundnessFactor * (waveA + waveB)",
+                  "            let x: CGFloat = rect.midX + horizontalRadius * CGFloat(wave * cos(angle))",
+                  "            let y: CGFloat = rect.midY + verticalRadius * CGFloat(wave * sin(angle))",
+                  "            return CGPoint(x: x, y: y)",
+                  "        }",
+              ]
+              new = "\\n".join(new_lines) + "\\n"
 
               if text.count(old) != 1:
                   raise SystemExit(
