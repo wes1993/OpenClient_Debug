@@ -501,6 +501,7 @@ jobs:
 
           HAS_NEW_PROJECT_FAILURE=false
           HAS_SIDE_QUESTION_FAILURE=false
+          HAS_ACTIVITY_WORKFLOW_FAILURE=false
 
           if grep -E -q "NewProjectChatFacade\.swift:[0-9]+:[0-9]+: error: the compiler is unable to type-check this expression in reasonable time" "$RUNNER_TEMP/openclient-build.log"; then
             HAS_NEW_PROJECT_FAILURE=true
@@ -510,7 +511,11 @@ jobs:
             HAS_SIDE_QUESTION_FAILURE=true
           fi
 
-          if [ "$HAS_NEW_PROJECT_FAILURE" != "true" ] && [ "$HAS_SIDE_QUESTION_FAILURE" != "true" ]; then
+          if grep -E -q "ActivityWorkflowView\\.swift:[0-9]+:[0-9]+: error: the compiler is unable to type-check this expression in reasonable time" "$RUNNER_TEMP/openclient-build.log"; then
+            HAS_ACTIVITY_WORKFLOW_FAILURE=true
+          fi
+
+          if [ "$HAS_NEW_PROJECT_FAILURE" != "true" ] && [ "$HAS_SIDE_QUESTION_FAILURE" != "true" ] && [ "$HAS_ACTIVITY_WORKFLOW_FAILURE" != "true" ]; then
             echo "::error::Swift type-checker failure detected, but it is not one of the known workaround targets."
             grep -E "error: the compiler is unable to type-check this expression in reasonable time" "$RUNNER_TEMP/openclient-build.log" || true
             exit 1
@@ -523,7 +528,7 @@ jobs:
 
           echo "::warning::Known Swift type-checker failure detected. Applying targeted temporary workaround(s) and retrying."
 
-          HAS_NEW_PROJECT_FAILURE="$HAS_NEW_PROJECT_FAILURE" HAS_SIDE_QUESTION_FAILURE="$HAS_SIDE_QUESTION_FAILURE" python3 - <<'PY'
+          HAS_NEW_PROJECT_FAILURE="$HAS_NEW_PROJECT_FAILURE" HAS_SIDE_QUESTION_FAILURE="$HAS_SIDE_QUESTION_FAILURE" HAS_ACTIVITY_WORKFLOW_FAILURE="$HAS_ACTIVITY_WORKFLOW_FAILURE" python3 - <<'PY'
           from pathlib import Path
           import os
 
@@ -587,6 +592,47 @@ jobs:
               path.write_text(patched)
               print(f"Temporary NewProjectChatFacade workaround applied to {len(entries)} publishers.")
 
+          if os.environ["HAS_ACTIVITY_WORKFLOW_FAILURE"] == "true":
+              path = Path("OpenCodeIOSClient/Views/Sessions/ActivityWorkflowView.swift")
+              text = path.read_text()
+
+              old = """        let offsets = Array(Set((0..<columnCount).map { index in
+                      min(end, max(0, 16 + CGFloat(index) * step + columnWidth / 2 - viewport / 2))
+                  })).sorted()
+                  let current = offsets.indices.min { abs(offsets[$0] - context.originalTarget.rect.minX) < abs(offsets[$1] - context.originalTarget.rect.minX) } ?? 0
+                  let proposed = offsets.indices.min { abs(offsets[$0] - target.rect.minX) < abs(offsets[$1] - target.rect.minX) } ?? current
+              """
+
+              new = """        let rawOffsets: [CGFloat] = (0..<columnCount).map { index -> CGFloat in
+                      let centeredOffset: CGFloat = 16 + CGFloat(index) * step + columnWidth / 2 - viewport / 2
+                      return min(end, max(0, centeredOffset))
+                  }
+                  let offsets: [CGFloat] = Array(Set(rawOffsets)).sorted()
+
+                  let originalX: CGFloat = context.originalTarget.rect.minX
+                  let current: Int = offsets.indices.min { lhs, rhs in
+                      let lhsDistance: CGFloat = abs(offsets[lhs] - originalX)
+                      let rhsDistance: CGFloat = abs(offsets[rhs] - originalX)
+                      return lhsDistance < rhsDistance
+                  } ?? 0
+
+                  let proposedX: CGFloat = target.rect.minX
+                  let proposed: Int = offsets.indices.min { lhs, rhs in
+                      let lhsDistance: CGFloat = abs(offsets[lhs] - proposedX)
+                      let rhsDistance: CGFloat = abs(offsets[rhs] - proposedX)
+                      return lhsDistance < rhsDistance
+                  } ?? current
+              """
+
+              if text.count(old) != 1:
+                  raise SystemExit(
+                      f"Expected exactly one ActivityWorkflowScrollTarget offset block, found {text.count(old)}; "
+                      "refusing to apply ActivityWorkflowView workaround."
+                  )
+
+              path.write_text(text.replace(old, new))
+              print("Temporary ActivityWorkflowView type-checker workaround applied.")
+
           if os.environ["HAS_SIDE_QUESTION_FAILURE"] == "true":
               path = Path("OpenCodeIOSClient/Views/Chat/SideQuestionSheet.swift")
               text = path.read_text()
@@ -627,6 +673,9 @@ jobs:
           fi
           if [ "$HAS_SIDE_QUESTION_FAILURE" = "true" ]; then
             git diff -- OpenCodeIOSClient/Views/Chat/SideQuestionSheet.swift
+          fi
+          if [ "$HAS_ACTIVITY_WORKFLOW_FAILURE" = "true" ]; then
+            git diff -- OpenCodeIOSClient/Views/Sessions/ActivityWorkflowView.swift
           fi
 
           rm -rf "$RUNNER_TEMP/DerivedData"
