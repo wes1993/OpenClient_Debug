@@ -521,10 +521,9 @@ jobs:
             exit 1
           fi
 
-          # A build may expose only the first type-checker failure; after fixing it, the
-          # next compiler pass can reveal another known failure. Apply every guarded,
-          # known workaround in the same retry so we don't fail one known issue at a time.
-          HAS_NEW_PROJECT_FAILURE=true
+          # The first compiler pass can stop before reporting every known failure.
+          # Apply the two stable view-expression workarounds together; only apply the
+          # facade workaround when the compiler actually reported that specific failure.
           HAS_SIDE_QUESTION_FAILURE=true
           HAS_ACTIVITY_WORKFLOW_FAILURE=true
 
