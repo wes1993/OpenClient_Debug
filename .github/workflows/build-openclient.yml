@@ -511,7 +511,7 @@ jobs:
             HAS_SIDE_QUESTION_FAILURE=true
           fi
 
-          if grep -E -q "ActivityWorkflowView\\.swift:[0-9]+:[0-9]+: error: the compiler is unable to type-check this expression in reasonable time" "$RUNNER_TEMP/openclient-build.log"; then
+          if grep -E -q "ActivityWorkflowView\.swift:[0-9]+:[0-9]+: error: the compiler is unable to type-check this expression in reasonable time" "$RUNNER_TEMP/openclient-build.log"; then
             HAS_ACTIVITY_WORKFLOW_FAILURE=true
           fi
 
