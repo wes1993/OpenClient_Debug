@@ -595,42 +595,60 @@ jobs:
           if os.environ["HAS_ACTIVITY_WORKFLOW_FAILURE"] == "true":
               path = Path("OpenCodeIOSClient/Views/Sessions/ActivityWorkflowView.swift")
               text = path.read_text()
+              lines = text.splitlines(keepends=True)
 
-              old = """        let offsets = Array(Set((0..<columnCount).map { index in
-                      min(end, max(0, 16 + CGFloat(index) * step + columnWidth / 2 - viewport / 2))
-                  })).sorted()
-                  let current = offsets.indices.min { abs(offsets[$0] - context.originalTarget.rect.minX) < abs(offsets[$1] - context.originalTarget.rect.minX) } ?? 0
-                  let proposed = offsets.indices.min { abs(offsets[$0] - target.rect.minX) < abs(offsets[$1] - target.rect.minX) } ?? current
-              """
-
-              new = """        let rawOffsets: [CGFloat] = (0..<columnCount).map { index -> CGFloat in
-                      let centeredOffset: CGFloat = 16 + CGFloat(index) * step + columnWidth / 2 - viewport / 2
-                      return min(end, max(0, centeredOffset))
-                  }
-                  let offsets: [CGFloat] = Array(Set(rawOffsets)).sorted()
-
-                  let originalX: CGFloat = context.originalTarget.rect.minX
-                  let current: Int = offsets.indices.min { lhs, rhs in
-                      let lhsDistance: CGFloat = abs(offsets[lhs] - originalX)
-                      let rhsDistance: CGFloat = abs(offsets[rhs] - originalX)
-                      return lhsDistance < rhsDistance
-                  } ?? 0
-
-                  let proposedX: CGFloat = target.rect.minX
-                  let proposed: Int = offsets.indices.min { lhs, rhs in
-                      let lhsDistance: CGFloat = abs(offsets[lhs] - proposedX)
-                      let rhsDistance: CGFloat = abs(offsets[rhs] - proposedX)
-                      return lhsDistance < rhsDistance
-                  } ?? current
-              """
-
-              if text.count(old) != 1:
+              starts = [
+                  i for i, line in enumerate(lines)
+                  if line.strip() == "let offsets = Array(Set((0..<columnCount).map { index in"
+              ]
+              if len(starts) != 1:
                   raise SystemExit(
-                      f"Expected exactly one ActivityWorkflowScrollTarget offset block, found {text.count(old)}; "
+                      f"Expected exactly one ActivityWorkflowScrollTarget offset block, found {len(starts)}; "
                       "refusing to apply ActivityWorkflowView workaround."
                   )
 
-              path.write_text(text.replace(old, new))
+              start = starts[0]
+              end = next(
+                  (
+                      i for i in range(start + 1, len(lines))
+                      if lines[i].strip().startswith("let proposed = offsets.indices.min")
+                  ),
+                  None,
+              )
+              if end is None:
+                  raise SystemExit(
+                      "Could not find ActivityWorkflowScrollTarget proposed offset; "
+                      "refusing to apply ActivityWorkflowView workaround."
+                  )
+
+              indent = lines[start][:len(lines[start]) - len(lines[start].lstrip())]
+              inner = indent + "    "
+              replacement = [
+                  f"{indent}let rawOffsets: [CGFloat] = (0..<columnCount).map { index -> CGFloat in\\n",
+                  f"{inner}let centeredOffset: CGFloat = 16 + CGFloat(index) * step + columnWidth / 2 - viewport / 2\\n",
+                  f"{inner}return min(end, max(0, centeredOffset))\\n",
+                  f"{indent}}}\\n",
+                  f"{indent}let offsets: [CGFloat] = Array(Set(rawOffsets)).sorted()\\n",
+                  "\\n",
+                  f"{indent}let originalX: CGFloat = context.originalTarget.rect.minX\\n",
+                  f"{indent}let current: Int = offsets.indices.min {{ lhs, rhs in\\n",
+                  f"{inner}let lhsDistance: CGFloat = abs(offsets[lhs] - originalX)\\n",
+                  f"{inner}let rhsDistance: CGFloat = abs(offsets[rhs] - originalX)\\n",
+                  f"{inner}return lhsDistance < rhsDistance\\n",
+                  f"{indent}}} ?? 0\\n",
+                  "\\n",
+                  f"{indent}let proposedX: CGFloat = target.rect.minX\\n",
+                  f"{indent}let proposed: Int = offsets.indices.min {{ lhs, rhs in\\n",
+                  f"{inner}let lhsDistance: CGFloat = abs(offsets[lhs] - proposedX)\\n",
+                  f"{inner}let rhsDistance: CGFloat = abs(offsets[rhs] - proposedX)\\n",
+                  f"{inner}return lhsDistance < rhsDistance\\n",
+                  f"{indent}}} ?? current\\n",
+              ]
+
+              patched = "".join(lines[:start] + replacement + lines[end + 1:])
+              if patched == text:
+                  raise SystemExit("ActivityWorkflowView workaround produced no source change.")
+              path.write_text(patched)
               print("Temporary ActivityWorkflowView type-checker workaround applied.")
 
           if os.environ["HAS_SIDE_QUESTION_FAILURE"] == "true":
