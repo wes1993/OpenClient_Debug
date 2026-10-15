@@ -645,7 +645,7 @@ jobs:
                   "                           y: rect.midY + verticalRadius * wave * sin(angle))",
                   "        }",
               ]
-              old = "\\n".join(old_lines) + "\\n"
+              old = "\n".join(old_lines) + "\n"
 
               new_lines = [
                   "        let points: [CGPoint] = (0..<count).map { index in",
@@ -659,7 +659,7 @@ jobs:
                   "            return CGPoint(x: x, y: y)",
                   "        }",
               ]
-              new = "\\n".join(new_lines) + "\\n"
+              new = "\n".join(new_lines) + "\n"
 
               if text.count(old) != 1:
                   raise SystemExit(
