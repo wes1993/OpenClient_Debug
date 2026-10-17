@@ -75,7 +75,10 @@ jobs:
   build:
     needs: check
     if: needs.check.outputs.build == 'true'
-    runs-on: macos-15
+    # Xcode 27 (Swift 6.3+) contains the fix for the async-let LIFO tear-down
+    # crash ("freed pointer was not the last allocation"). The macos-15 image
+    # tops out at Xcode 26.3, which is still affected.
+    runs-on: xcode-27
     steps:
       - name: Checkout upstream source
         uses: actions/checkout@v4
